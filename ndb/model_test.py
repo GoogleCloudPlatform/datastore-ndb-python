@@ -680,24 +680,36 @@ class ModelTests(unittest.TestCase):
     self.assertEqual(q, p)
 
   def testOrphanProperties(self):
+    class Tag(model.Model):
+      name = model.StringProperty()
+      rating = model.IntegerProperty()
+    model.FixUpProperties(Tag)
     class Address(model.Model):
-      street = model.StringProperty()
+      line = model.StringProperty(repeated=True)
       city = model.StringProperty()
       zip = model.IntegerProperty()
+      tags = model.StructuredProperty(Tag, repeated=True)
     model.FixUpProperties(Address)
     class Person(model.Model):
       address = model.StructuredProperty(Address)
-      age = model.IntegerProperty()
+      age = model.IntegerProperty(repeated=True)
       name = model.StringProperty()
       k = model.KeyProperty()
     model.FixUpProperties(Person)
     k = model.Key(flat=['Person', 42])
-    p = Person(name='White House', k=k, age=210,
-               address=Address(street='1600 Pennsylvania', zip=20500))
+    p = Person(name='White House', k=k, age=[210, 211],
+               address=Address(line=['1600 Pennsylvania', 'Washongton, DC'],
+##                                tags=[Tag(name='a', rating=1),
+##                                      Tag(name='b', rating=2)],
+                               zip=20500))
     p.key = k
     pb = p.ToPb()
     q = model.Model()
     q.FromPb(pb)
+    import pdb; pdb.set_trace()
+    print q._values
+    print q._properties
+    print q._db_properties
     pb = q.ToPb()
     self.assertEqual(pb, p.ToPb(),
                      str(q.ToPb()) + '\n**********\n' + str(p.ToPb()))

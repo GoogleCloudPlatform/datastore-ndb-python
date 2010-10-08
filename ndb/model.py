@@ -63,10 +63,9 @@ class Model(object):
   # TODO: Support keyword args to initialize property values
   def __init__(self, **kwds):
     cls = self.__class__
-    if kwds:
-      # TODO: Enable this unconditionally (it currently breaks some old tests)
-      if cls._properties is None:
-        FixUpProperties(cls)
+    if (cls is not Model and
+        (cls._properties is None or cls._db_properties is None)):
+      FixUpProperties(cls)
     self._key = None
     self._values = {}
     for name, value in kwds.iteritems():
@@ -128,6 +127,8 @@ class Model(object):
 
   def ToPb(self):
     pb = entity_pb.EntityProto()
+
+    # TODO: Move the key stuff into ModelAdapter.entity_to_pb()?
     key = self._key
     if key is None:
       ref = _ReferenceFromPairs([(self.getkind(), None)], pb.mutable_key())
@@ -139,10 +140,12 @@ class Model(object):
     elem = ref.path().element(0)
     if elem.id() or elem.name():
       group.add_element().CopyFrom(elem)
+
     if self._properties:
       # TODO: Sort by property declaration order
       for name, prop in sorted(self._properties.iteritems()):
         prop.Serialize(self, pb)
+
     return pb
 
   # TODO: Make this a class method?
@@ -150,24 +153,47 @@ class Model(object):
     assert not self._key
     assert not self._values
     assert isinstance(pb, entity_pb.EntityProto)
+
+    # TODO: Move the key stuff into ModelAdapter.pb_to_entity()?
     if pb.has_key():
       self._key = Key(reference=pb.key())
-    for plist in pb.property_list(), pb.raw_property_list():
+
+    indexed_properties = pb.property_list()
+    unindexed_properties = pb.raw_property_list()
+    for plist in [indexed_properties, unindexed_properties]:
       for p in plist:
-        # TODO: There's code to be shared here with
-        # StructuredProperty.Deserialize()
         db_name = p.name()
-        head = db_name
-        if '.' in db_name:
-          head, tail = db_name.split('.', 1)
+        parts = db_name.split('.', 1)
+        head = parts[0]
+        prop = None
         if self._db_properties:
           prop = self._db_properties.get(head)
-          if prop is not None:
-            prop.Deserialize(self, p)
-            continue
-        prop = FakeProperty(self, p, db_name, head,
-                            (plist is pb.property_list()))
+        if prop is None:
+          prop = self.FakeProperty(p, db_name, head,
+                                   (plist is indexed_properties))
         prop.Deserialize(self, p)
+
+  def FakeProperty(self, p, db_name, head, indexed=True):
+    cls = self.__class__
+    if self._db_properties is cls._db_properties:
+      self._db_properties = dict(cls._db_properties or ())
+    if self._properties is cls._properties:
+      self._properties = dict(cls._properties or ())
+
+    if head != db_name:
+      prop = StructuredProperty(Model, head)
+    else:
+      prop = GenericProperty(head,
+                             repeated=p.multiple(),
+                             indexed=indexed)
+
+    # TODO: This line is suspicious; does it work with repeated properties???
+    prop.FixUp(str(id(prop)))  # Use a unique string as Python name.
+
+    self._db_properties[prop.db_name] = prop
+    self._properties[prop.name] = prop
+    print "FakeProperty() ->", prop
+    return prop
 
   # TODO: Move db methods out of this class?
 
@@ -184,25 +210,7 @@ class Model(object):
   def delete(self):
     conn.delete([self.key()])
 
-def FakeProperty(self, p, db_name, head, indexed=True):
-  cls = self.__class__
-  if self._db_properties is cls._db_properties:
-    self._db_properties = dict(cls._db_properties or ())
-  if self._properties is cls._properties:
-    self._properties = dict(cls._properties or ())
-  if '.' in db_name:
-    prop = StructuredProperty(Model, head)
-  else:
-    assert head == db_name
-    prop = GenericProperty(head,
-                           repeated=p.multiple(),
-                           indexed=indexed)
-  prop.FixUp(str(id(prop)))  # Use a unique string as Python name.
-  self._db_properties[prop.db_name] = prop
-  self._properties[prop.name] = prop
-  return prop
-
-# TODO: Use a metaclass to automatically call FixUpProperties()
+# TODO: Use a metaclass to automatically call FixUpProperties()?
 # TODO: More Property types
 # TODO: Orphan properties
 
@@ -394,19 +402,19 @@ def FixUpProperties(cls):
 
 class StructuredProperty(Property):
 
-  def __init__(self, minimodelclass, db_name=None, indexed=None,
-               repeated=None):
-    if repeated:
-      if minimodelclass._properties is None:
-        FixUpProperties(minimodelclass)
-      assert not minimodelclass._has_repeated
+  def __init__(self, modelclass, db_name=None, indexed=None, repeated=None):
     super(StructuredProperty, self).__init__(db_name=db_name, indexed=indexed,
                                              repeated=repeated)
-    self.minimodelclass = minimodelclass
+    if (modelclass is not Model and
+      (modelclass._properties is None or modelclass._db_properties is None)):
+      FixUpProperties(modelclass)
+    if self.repeated:
+      assert not modelclass._has_repeated
+    self.modelclass = modelclass
 
   def __repr__(self):
     s = '%s(%s, db_name=%r, indexed=%r, repeated=%r)' % (
-      self.__class__.__name__, self.minimodelclass.__name__,
+      self.__class__.__name__, self.modelclass.__name__,
       self.db_name, self.indexed, self.repeated)
     if self.name != self.db_name:
       s += '<name=%r>' % self.name
@@ -419,7 +427,7 @@ class StructuredProperty(Property):
       # TODO: Is this the right thing for queries?
       # Skip structured values that are None.
       return
-    cls = self.minimodelclass
+    cls = self.modelclass
     if cls._properties is None and cls is not Model:
       FixUpProperties(cls)
     if self.repeated:
@@ -428,15 +436,16 @@ class StructuredProperty(Property):
     else:
       assert isinstance(value, cls)
       values = [value]
-    items = None
+    gitems = None
     if cls._properties:
       # TODO: Sort by property declaration order
-      items = sorted(cls._properties.iteritems())
+      gitems = sorted(cls._properties.iteritems())
     for value in values:
-      if items is None and value._properties:
-        items = sorted(value._properties.iteritems())
-      if items:
-        for name, prop in items:
+      litems = gitems
+      if litems is None and value._properties:
+        litems = sorted(value._properties.iteritems())
+      if litems:
+        for name, prop in litems:
           prop.Serialize(value, pb, prefix + self.db_name + '.')
 
   def Deserialize(self, entity, p, prefix=''):
@@ -448,14 +457,14 @@ class StructuredProperty(Property):
     assert len(parts) > n, (prefix, db_name, parts, n)
     next = parts[n]
     prop = None
-    if self.minimodelclass._db_properties:
-      prop = self.minimodelclass._db_properties.get(next)
+    if self.modelclass._db_properties:
+      prop = self.modelclass._db_properties.get(next)
     if prop is None:
       subentity = entity._values.get(self.name)
       if subentity is None:
-        subentity = self.minimodelclass()
+        subentity = self.modelclass()
         entity._values[self.name] = subentity
-      prop = FakeProperty(subentity, p, '.'.join(parts[n:]), next)
+      prop = subentity.FakeProperty(p, '.'.join(parts[n:]), next)
     if self.repeated:
       if self.name in entity._values:
         values = entity._values[self.name]
@@ -467,17 +476,17 @@ class StructuredProperty(Property):
       # Find the first subentity that doesn't have a value for this
       # property yet.
       for sub in values:
-        assert isinstance(sub, self.minimodelclass)
+        assert isinstance(sub, self.modelclass)
         if prop.name not in sub._values:
           subentity = sub
           break
       else:
-        subentity = self.minimodelclass()
+        subentity = self.modelclass()
         values.append(subentity)
     else:
       subentity = entity._values.get(self.name)
       if subentity is None:
-        subentity = self.minimodelclass()
+        subentity = self.modelclass()
         entity._values[self.name] = subentity
     prop.Deserialize(subentity, p, prefix + next + '.')
 
