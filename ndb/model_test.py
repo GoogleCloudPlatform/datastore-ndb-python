@@ -679,14 +679,21 @@ class ModelTests(unittest.TestCase):
     self.assertEqual(q.k, None)
     self.assertEqual(p, q)
 
-  def testOrphanPropertiesSimple(self):
+  def testOrphanProperties(self):
+    class Address(model.Model):
+      street = model.StringProperty()
+      city = model.StringProperty()
+      zip = model.IntegerProperty()
+    model.FixUpProperties(Address)
     class Person(model.Model):
+      address = model.StructuredProperty(Address)
       age = model.IntegerProperty()
       name = model.StringProperty()
       k = model.KeyProperty()
     model.FixUpProperties(Person)
     k = model.Key(flat=['Person', 42])
-    p = Person(name='White House', k=k, age=210)
+    p = Person(name='White House', k=k, age=210,
+               address=Address(street='1600 Pennsylvania', zip=20500))
     p.key = k
     pb = p.ToPb()
     q = model.Model()

@@ -148,28 +148,19 @@ class Model(object):
       self._key = Key(reference=pb.key())
     for plist in pb.property_list(), pb.raw_property_list():
       for p in plist:
+        # TODO: There's code to be shared here with
+        # StructuredProperty.Deserialize()
         db_name = p.name()
+        head = db_name
+        if '.' in db_name:
+          head, tail = db_name.split('.', 1)
         if self._db_properties:
-          if '.' in db_name:
-            head, tail = db_name.split('.', 1)
-            prop = self._db_properties.get(head)
-          else:
-            prop = self._db_properties.get(db_name)
+          prop = self._db_properties.get(head)
           if prop is not None:
             prop.Deserialize(self, p)
             continue
-        cls = self.__class__
-        if self._db_properties is cls._db_properties:
-          self._db_properties = dict(cls._db_properties or ())
-        if self._properties is cls._properties:
-          self._properties = dict(cls._properties or ())
-        # TODO: Structured properties
-        prop = GenericProperty(db_name,
-                               repeated=p.multiple(),
-                               indexed=(plist is pb.property_list()))
-        prop.FixUp(str(prop))  # Use a unique string as Python name.
-        self._db_properties[db_name] = prop
-        self._properties[prop.name] = prop
+        prop = FakeProperty(self, p, db_name, head,
+                            (plist is pb.property_list()))
         prop.Deserialize(self, p)
 
   # TODO: Move db methods out of this class?
@@ -187,6 +178,26 @@ class Model(object):
   def delete(self):
     conn.delete([self.key()])
 
+def FakeProperty(self, p, db_name, head, indexed=True):
+  print '------------\nFakeProperty: %r %r %r' % (p.name(), db_name, head)
+  cls = self.__class__
+  if self._db_properties is cls._db_properties:
+    self._db_properties = dict(cls._db_properties or ())
+  if self._properties is cls._properties:
+    self._properties = dict(cls._properties or ())
+  if '.' in db_name:
+    prop = StructuredProperty(Model, head)
+  else:
+    assert head == db_name
+    prop = GenericProperty(head,
+                           repeated=p.multiple(),
+                           indexed=indexed)
+  prop.FixUp(head)  # XXX str(id(prop)))  # Use a unique string as Python name.
+  self._db_properties[db_name] = prop
+  self._properties[prop.name] = prop
+  print 'return', prop
+  return prop
+
 # TODO: Use a metaclass to automatically call FixUpProperties()
 # TODO: More Property types
 # TODO: Orphan properties
@@ -194,6 +205,8 @@ class Model(object):
 class Property(object):
   # TODO: Separate 'simple' properties from base Property class
 
+  name = None
+  db_name = None
   indexed = True
   repeated = False
 
@@ -206,6 +219,11 @@ class Property(object):
       self.indexed = indexed
     if repeated is not None:
       self.repeated = repeated
+
+  def __repr__(self):
+    return '%s(db_name=%r, indexed=%r, repeated=%r) # name=%r' % (
+      self.__class__.__name__,
+      self.db_name, self.indexed, self.repeated, self.name)
 
   def FixUp(self, name):
     self.name = name
@@ -322,6 +340,7 @@ class BlobProperty(Property):
 
 class KeyProperty(Property):
   # TODO: namespaces
+  # TODO: optionally check the kind (validation)
 
   def DbSetValue(self, v, p, value):
     assert isinstance(value, Key)
@@ -351,6 +370,7 @@ class KeyProperty(Property):
 def FixUpProperties(cls):
   # NOTE: This may be called multiple times if properties are
   # dynamically added to the class.
+  assert cls is not Model
   cls._properties = {}  # Map of {name: Property}
   cls._db_properties = {}  # Map of {db_name: Property}
   for name in set(dir(cls)):
@@ -377,6 +397,12 @@ class StructuredProperty(Property):
                                              repeated=repeated)
     self.minimodelclass = minimodelclass
 
+  def __repr__(self):
+    return '%s(%s, db_name=%r, indexed=%r, repeated=%r) # name=%r' % (
+      self.__class__.__name__, self.minimodelclass.__name__,
+      self.db_name, self.indexed, self.repeated, self.name)
+    
+
   def Serialize(self, entity, pb, prefix=''):
     # entity -> pb; pb is an EntityProto message
     value = entity._values.get(self.name)
@@ -385,7 +411,7 @@ class StructuredProperty(Property):
       # Skip structured values that are None.
       return
     cls = self.minimodelclass
-    if cls._properties is None:
+    if cls._properties is None and cls is not Model:
       FixUpProperties(cls)
     if self.repeated:
       assert isinstance(value, list)
@@ -393,11 +419,12 @@ class StructuredProperty(Property):
     else:
       assert isinstance(value, cls)
       values = [value]
-    # TODO: Sort by property declaration order
-    items = sorted(cls._properties.iteritems())
-    for value in values:
-      for name, prop in items:
-        prop.Serialize(value, pb, prefix + self.db_name + '.')
+    if cls._properties:
+      # TODO: Sort by property declaration order
+      items = sorted(cls._properties.iteritems())
+      for value in values:
+        for name, prop in items:
+          prop.Serialize(value, pb, prefix + self.db_name + '.')
 
   def Deserialize(self, entity, p, prefix=''):
     db_name = p.name()
@@ -406,9 +433,16 @@ class StructuredProperty(Property):
     n = prefix.count('.') + 1  # Nesting level
     parts = db_name.split('.')
     assert len(parts) > n, (prefix, db_name, parts, n)
-    tail = parts[n]
-    prop = self.minimodelclass._db_properties.get(tail)
-    assert prop is not None, (prefix, db_name, parts, tail)
+    next = parts[n]
+    prop = None
+    if self.minimodelclass._db_properties:
+      prop = self.minimodelclass._db_properties.get(next)
+    if prop is None:
+      subentity = entity._values.get(self.name)
+      if subentity is None:
+        subentity = self.minimodelclass()
+        entity._values[self.name] = subentity
+      prop = FakeProperty(subentity, p, '.'.join(parts[n:]), next)
     if self.repeated:
       if self.name in entity._values:
         values = entity._values[self.name]
@@ -432,7 +466,7 @@ class StructuredProperty(Property):
       if subentity is None:
         subentity = self.minimodelclass()
         entity._values[self.name] = subentity
-    prop.Deserialize(subentity, p, prefix + tail + '.')
+    prop.Deserialize(subentity, p, prefix + next + '.')
 
 _EPOCH = datetime.datetime.utcfromtimestamp(0)
 
