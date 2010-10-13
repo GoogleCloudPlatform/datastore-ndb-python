@@ -33,13 +33,16 @@ class PendngTests(unittest.TestCase):
   def SetUpCallHooks(self):
     self.pre_args = []
     self.post_args = []
-    apiproxy_stub_map.apiproxy.GetPreCallHooks().Append('test1', self.PreCallHook)
-    apiproxy_stub_map.apiproxy.GetPostCallHooks().Append('test1', self.PostCallHook)
+    apiproxy_stub_map.apiproxy.GetPreCallHooks().Append('test1',
+                                                        self.PreCallHook)
+    apiproxy_stub_map.apiproxy.GetPostCallHooks().Append('test1',
+                                                         self.PostCallHook)
 
   def PreCallHook(self, service, call, request, response, rpc=None):
     self.pre_args.append((service, call, request, response, rpc))
 
-  def PostCallHook(self, service, call, request, response, rpc=None, error=None):
+  def PostCallHook(self, service, call, request, response,
+                   rpc=None, error=None):
     self.post_args.append((service, call, request, response, rpc, error))
 
   def testCallHooks(self):
