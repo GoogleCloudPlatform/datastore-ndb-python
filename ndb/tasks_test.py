@@ -2,6 +2,7 @@
 
 import os
 import re
+import sys
 import time
 import unittest
 
@@ -13,7 +14,7 @@ from core import datastore_rpc
 from ndb import eventloop
 from ndb import tasks
 from ndb import model
-from ndb.tasks import Future
+from ndb.tasks import Future, task
 
 class TaskTests(unittest.TestCase):
 
@@ -179,6 +180,45 @@ class TaskTests(unittest.TestCase):
     f = main_task()
     result = f.get_result()
     self.assertEqual(result, ([], []))
+
+class TracebackTests(unittest.TestCase):
+  """Checks that errors result in reasonable tracebacks."""
+
+  def testBasicError(self):
+    frames = [sys._getframe()]
+    @tasks.task
+    def level3():
+      frames.append(sys._getframe())
+      raise RuntimeError('hello')
+      yield
+    @tasks.task
+    def level2():
+      frames.append(sys._getframe())
+      yield level3()
+    @tasks.task
+    def level1():
+      frames.append(sys._getframe())
+      yield level2()
+    @tasks.task
+    def level0():
+      frames.append(sys._getframe())
+      yield level1()
+    fut = level0()
+    try:
+      fut.check_success()
+    except RuntimeError, err:
+      _, _, tb = sys.exc_info()
+      self.assertEqual(str(err), 'hello')
+      tbframes = []
+      while tb is not None:
+        # It's okay if some help_task_along frames are present.
+        if tb.tb_frame.f_code.co_name != 'help_task_along':
+          tbframes.append(tb.tb_frame)
+        tb = tb.tb_next
+      self.assertEqual(frames, tbframes)
+    else:
+      self.fail('Expected RuntimeError not raised')
+
 
 def main():
   unittest.main()

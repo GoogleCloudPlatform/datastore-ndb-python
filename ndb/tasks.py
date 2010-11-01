@@ -98,6 +98,7 @@ class Future(object):
     self._done = False
     self._result = None
     self._exception = None
+    self._traceback = None
     self._callbacks = []
     frame = sys._getframe(1)
     code = frame.f_code
@@ -132,11 +133,11 @@ class Future(object):
     for callback in self._callbacks:
       callback(self)  # TODO: What if it raises an exception?
 
-  def set_exception(self, exc):
-    # TODO: What about tracebacks?
+  def set_exception(self, exc, tb=None):
     assert isinstance(exc, BaseException)
     assert not self._done
     self._exception = exc
+    self._traceback = tb
     self._done = True
     for callback in self._callbacks:
       callback(self)
@@ -164,10 +165,14 @@ class Future(object):
     self.wait()
     return self._exception
 
+  def get_traceback(self):
+    self.wait()
+    return self._traceback
+
   def check_success(self):
     self.wait()
     if self._exception is not None:
-      raise self._exception
+      raise self._exception.__class__, self._exception, self._traceback
 
   def get_result(self):
     self.check_success()
@@ -229,11 +234,11 @@ def task(func):
 
   return task_wrapper
 
-def help_task_along(gen, fut, val=None, exc=None):
+def help_task_along(gen, fut, val=None, exc=None, tb=None):
   # XXX Docstring
   try:
     if exc is not None:
-      value = gen.throw(exc)
+      value = gen.throw(exc.__class__, exc, tb)
     else:
       value = gen.send(val)
 
@@ -243,7 +248,8 @@ def help_task_along(gen, fut, val=None, exc=None):
     return
 
   except Exception, err:
-    fut.set_exception(err)
+    _, _, tb = sys.exc_info()
+    fut.set_exception(err, tb)
     return
 
   else:
@@ -271,14 +277,15 @@ def on_rpc_completion(rpc, gen, fut):
   try:
     result = rpc.get_result()
   except Exception, err:
-    help_task_along(gen, fut, exc=err)
+    _, _, tb = sys.exc_info()
+    help_task_along(gen, fut, exc=err, tb=tb)
   else:
     help_task_along(gen, fut, result)
 
 def on_future_completion(future, gen, fut):
   exc = future.get_exception()
   if exc is not None:
-    help_task_along(gen, fut, exc=exc)
+    help_task_along(gen, fut, exc=exc, tb=future.get_traceback())
   else:
     val = future.get_result()  # This better not raise an exception.
     help_task_along(gen, fut, val)
