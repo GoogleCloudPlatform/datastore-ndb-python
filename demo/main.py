@@ -2,6 +2,7 @@
 
 import cgi
 import logging
+import sys
 import time
 
 from google.appengine.api import users
@@ -77,7 +78,12 @@ def MapQuery(query, entity_callback, connection, options=None):
     rpc = batch.next_batch_async(options)
     logging.info('batch with %d results, next_rpc=%r', len(batch.results), rpc)
     for entity in batch.results:
-      entity_callback(entity)
+      logging.info('Calling %s(%r)', entity_callback.__name__, entity)
+      try:
+        entity_callback(entity)
+      except Exception, err:
+        logging.exception('entity callback %s raised', entity_callback.__name__)
+        raise
     count += len(batch.results)
   raise tasks.Return(count)
 
@@ -85,25 +91,54 @@ def MapQueryToGenerator(query, generator, connection, options=None):
   # TODO: Make this into a task.
   assert tasks.is_generator(generator), '%r is not a generator' % generator
   # "Prime" the generator.  (TODO: does PEP 380 explain this?)
+  logging.info('Priming generator %r', generator)
   generator.next()
-  map_future = MapQuery(query, generator.send, connection, options)
   our_future = tasks.Future()
+  def wrap_send(val):
+    logging.info('Sending %r', val)
+    try:
+      value = generator.send(val)
+    except StopIteration, err:
+      result = tasks.get_return_value(err)
+      logging.info('send() returned %r', result)
+      our_future.set_result(result)
+      raise
+    except Exception:
+      logging.exception('send() raised')
+      t, v, tb = sys.exc_info()
+      our_future.set_exception(v, tb)
+      raise
+    else:
+      logging.info('send() yielded %r', value)
+      return value
+  map_future = MapQuery(query, wrap_send, connection, options)
 
   def callback(fut):
     # When map_future completes, extract a return value from the
     # generator and set it as our own future's result.
     assert fut is map_future, (fut, map_future)
+    if fut.get_exception():
+      logging.exception('map_future: raised %r', fut)
+    else:
+      logging.info('map_future: result %r', fut)
     # TODO: Use pep380.gclose().
     try:
-      generator.throw(GeneratorExit)
+      logging.info('callback(): throwing GeneratorExit')
+      value = generator.throw(GeneratorExit)
     except StopIteration, err:
       value = tasks.get_return_value(err)
+      logging.info('callback(): return value %r', value)
       our_future.set_result(value)
     except GeneratorExit:
-      our_future.set_result(None)
+      logging.info('callback(): it bounced back')
+      if not our_future.done():
+        our_future.set_result(None)
     except Exception, err:
-      our_future.set_exception(err)
+      logging.exception('callback(): it raised')
+      _, _, tb = sys.exc_info()
+      our_future.set_exception(err, tb)
     else:
+      logging.error('callback(): it yielded %r', value)
       our_future.set_exception(RuntimeError(
         'Throwing GeneratorExit into it did not stop the generator'))
 
@@ -132,15 +167,20 @@ def AsyncGetAccountByUser(user, create=False):
       hit_future.set_result(result)
 
   def accumulator():
+    logging.info('accumulator(): started')
     while True:
+      logging.info('accumulator(): yielding')
       result = yield
+      logging.info('accumulator(): yield produced %r', result)
       assert isinstance(result, Account), '%r is not an Account [2]' % result
+      logging.info('accumulator(): returning %r', result)
       raise tasks.Return(result)
 
-  if False:
+  if True:
     # XXX This code is broken
     f = MapQueryToGenerator(query, accumulator(), model.conn)
     result = yield f  # XXX Somehow this doesn't get the proper value?!
+    logging.info('yield %r returned %r', f, result)
   else:
     # This code works
     f = MapQuery(query, result_callback, model.conn)
