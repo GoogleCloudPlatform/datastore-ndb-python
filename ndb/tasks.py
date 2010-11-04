@@ -290,10 +290,16 @@ def task(func):
 
   def task_wrapper(*args, **kwds):
     # XXX Docstring
+
+    # TODO: make most of this a public function so you can take a bare
+    # generator and turn it into a task dynamically.  (Monocle has
+    # this I believe.)
     fut = Future()
     try:
       result = func(*args, **kwds)
     except StopIteration, err:
+      # Just in case the function is not a generator but still uses
+      # the "raise Return(...)" idiom, we'll extract the return value.
       result = get_return_value(err)
     if is_generator(result):
       eventloop.queue_task(0, help_task_along, result, fut)
