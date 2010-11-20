@@ -8,7 +8,7 @@ import logging
 
 from google.appengine.datastore import entity_pb
 
-from core import datastore_rpc
+from google.appengine.datastore import datastore_rpc
 
 # NOTE: Key is meant for export, too.
 from ndb.key import Key, _ReferenceFromPairs, _DefaultAppId

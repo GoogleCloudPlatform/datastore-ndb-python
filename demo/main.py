@@ -12,8 +12,8 @@ from google.appengine.datastore import entity_pb
 from google.appengine.ext import webapp
 from google.appengine.ext.webapp import util
 
-from core import datastore_query
-from core import datastore_rpc
+from google.appengine.datastore import datastore_query
+from google.appengine.datastore import datastore_rpc
 
 from ndb import context
 from ndb import eventloop

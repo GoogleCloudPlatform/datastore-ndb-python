@@ -8,7 +8,7 @@ import os
 
 from google.appengine.datastore import entity_pb
 
-from core import datastore_rpc
+from google.appengine.datastore import datastore_rpc
 
 positional = datastore_rpc._positional
 

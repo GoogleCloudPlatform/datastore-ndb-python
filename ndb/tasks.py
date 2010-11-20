@@ -67,7 +67,7 @@ import types
 from google.appengine.api.apiproxy_stub_map import UserRPC
 from google.appengine.api.apiproxy_rpc import RPC
 
-from core import datastore_rpc
+from google.appengine.datastore import datastore_rpc
 from ndb import eventloop, utils
 
 def is_generator(obj):
