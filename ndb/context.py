@@ -9,7 +9,7 @@ import sys
 from google.appengine.api import datastore_errors
 from google.appengine.api import memcache
 
-from core import datastore_rpc
+from google.appengine.datastore import datastore_rpc
 
 from ndb import model, tasks, eventloop, utils
 
