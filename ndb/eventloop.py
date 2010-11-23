@@ -17,7 +17,7 @@ import time
 
 from google.appengine.api.apiproxy_rpc import RPC
 
-from core import datastore_rpc
+from google.appengine.datastore import datastore_rpc
 
 IDLE = RPC.IDLE
 RUNNING = RPC.RUNNING
