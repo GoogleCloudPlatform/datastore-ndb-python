@@ -1,5 +1,10 @@
 # Convenience to run tests and coverage.
 
+# You must have installed the App Engine SDK toolkit, version 1.4.0 or
+# later, and it must be installed in /usr/local/google_appengine.
+
+# This probably won't work on Windows.
+
 FLAGS=
 GAE=	/usr/local/google_appengine
 GAEPATH=$(GAE):$(GAE)/lib/yaml/lib
@@ -51,6 +56,9 @@ deploy:
 
 python:
 	PYTHONPATH=$(GAEPATH):. $(PYTHON)
+
+zip:
+	D=`pwd`; D=`basename $$D`; cd ..; rm $$D.zip; zip $$D.zip `hg st -c -m -a -n -X $$D/.idea $$D`
 
 clean:
 	rm -rf htmlcov
