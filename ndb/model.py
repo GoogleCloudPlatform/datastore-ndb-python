@@ -77,6 +77,7 @@ import copy
 import datetime
 import logging
 
+from google.appengine.api import datastore_errors
 from google.appengine.datastore import datastore_query
 from google.appengine.datastore import datastore_rpc
 from google.appengine.datastore import entity_pb
@@ -85,7 +86,11 @@ import ndb.key
 Key = ndb.key.Key  # For export.
 
 # Property and its subclasses are added later.
-__all__ = ['Key', 'ModelAdapter', 'MetaModel', 'Model', 'Expando']
+__all__ = ['Key', 'ModelAdapter', 'MetaModel', 'Model', 'Expando', 'KindError']
+
+
+class KindError(datastore_errors.BadValueError):
+  """Raised when an implementation for a kind can't be found."""
 
 
 class ModelAdapter(datastore_rpc.AbstractAdapter):
@@ -96,6 +101,16 @@ class ModelAdapter(datastore_rpc.AbstractAdapter):
 
   See the base class docstring for more info about the signatures.
   """
+
+  def __init__(self, default_model=None):
+    """Constructor.
+    
+    Args:
+      default_model: If an implementation for the kind cannot be found, use this
+        model class. If none is specified, an exception will be thrown
+        (default).
+    """
+    self.default_model = default_model
 
   def pb_to_key(self, pb):
     return Key(reference=pb)
@@ -111,9 +126,9 @@ class ModelAdapter(datastore_rpc.AbstractAdapter):
       # but the key is extracted again and stored in the entity by FromPb().
       key = Key(reference=pb.key())
       kind = key.kind()
-    # When unpacking an unknown kind, default to Expando.
-    # TODO: This could be risky; it should be an explicitly selected option.
-    modelclass = Model._kind_map.get(kind, Expando)
+    modelclass = Model._kind_map.get(kind, self.default_model)
+    if modelclass is None:
+      raise KindError("No implementation found for kind '%s'" % kind)
     ent = modelclass()
     ent.FromPb(pb)
     return ent
@@ -122,9 +137,11 @@ class ModelAdapter(datastore_rpc.AbstractAdapter):
     pb = ent.ToPb()
     return pb
 
-def make_connection(config=None):
+def make_connection(config=None, default_model=None):
   """Create a new Connection object with the right adapter."""
-  return datastore_rpc.Connection(adapter=ModelAdapter(), config=config)
+  return datastore_rpc.Connection(
+      adapter=ModelAdapter(default_model),
+      config=config)
 
 
 class MetaModel(type):

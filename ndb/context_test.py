@@ -41,7 +41,9 @@ class ContextTests(unittest.TestCase):
     self.set_up_eventloop()
     self.set_up_stubs()
     MyAutoBatcher.reset_log()
-    self.ctx = context.Context(auto_batcher_class=MyAutoBatcher)
+    self.ctx = context.Context(
+        conn=model.make_connection(default_model=model.Expando),
+        auto_batcher_class=MyAutoBatcher)
 
   def set_up_eventloop(self):
     if eventloop._EVENT_LOOP_KEY in os.environ:
@@ -356,6 +358,20 @@ class ContextTests(unittest.TestCase):
     val = outer()
     self.assertEqual(val, 42)
     self.assertTrue(tasklets.get_context() is old_ctx)
+
+  def testKindError(self):
+    ctx = context.Context()
+    # If the cache is enabled, attempts to retrieve the object we just put will
+    # be satisfied from the cache, so the adapter we're testing will never get
+    # called.
+    ctx.set_cache_policy(lambda key: False)
+    @tasklets.tasklet
+    def foo():
+      key1 = model.Key(flat=('Foo', 1))
+      ent1 = model.Expando(key=key1, foo=42, bar='hello')
+      key = yield ctx.put(ent1)
+      a = yield ctx.get(key1)
+    self.assertRaises(model.KindError, foo().check_success)
 
 
 def main():

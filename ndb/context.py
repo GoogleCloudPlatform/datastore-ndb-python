@@ -73,7 +73,7 @@ class Context(object):
 
   def __init__(self, conn=None, auto_batcher_class=AutoBatcher):
     if conn is None:
-      conn = datastore_rpc.Connection(adapter=model.ModelAdapter())
+      conn = model.make_connection()
     self._conn = conn
     self._auto_batcher_class = auto_batcher_class
     self._get_batcher = auto_batcher_class(self._get_tasklet)
