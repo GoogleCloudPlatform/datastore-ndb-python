@@ -10,6 +10,7 @@ import unittest
 from google.appengine.api import apiproxy_stub_map
 from google.appengine.api import datastore_errors
 from google.appengine.api import datastore_file_stub
+from google.appengine.api.memcache import memcache_stub
 from google.appengine.datastore import entity_pb
 
 from ndb import model, query
@@ -81,6 +82,7 @@ key <
 entity_group <
 >
 raw_property <
+  meaning: 14
   name: "b"
   value <
     stringValue: "\\000\\377"
@@ -88,6 +90,7 @@ raw_property <
   multiple: false
 >
 raw_property <
+  meaning: 15
   name: "t"
   value <
     stringValue: "Hello world\\341\\210\\264"
@@ -193,6 +196,7 @@ key <
 entity_group <
 >
 raw_property <
+  meaning: 15
   name: "root.left.left.name"
   value <
     stringValue: "a1a"
@@ -200,6 +204,7 @@ raw_property <
   multiple: false
 >
 raw_property <
+  meaning: 15
   name: "root.left.name"
   value <
     stringValue: "a1"
@@ -207,6 +212,7 @@ raw_property <
   multiple: false
 >
 raw_property <
+  meaning: 15
   name: "root.left.rite.name"
   value <
     stringValue: "a1b"
@@ -214,6 +220,7 @@ raw_property <
   multiple: false
 >
 raw_property <
+  meaning: 15
   name: "root.name"
   value <
     stringValue: "a"
@@ -221,6 +228,7 @@ raw_property <
   multiple: false
 >
 raw_property <
+  meaning: 15
   name: "root.rite.name"
   value <
     stringValue: "a2"
@@ -228,6 +236,7 @@ raw_property <
   multiple: false
 >
 raw_property <
+  meaning: 15
   name: "root.rite.rite.name"
   value <
     stringValue: "a2b"
@@ -1073,7 +1082,20 @@ class DatastoreTests(unittest.TestCase):
     apiproxy_stub_map.apiproxy = apiproxy_stub_map.APIProxyStubMap()
     stub = datastore_file_stub.DatastoreFileStub('_', None)
     apiproxy_stub_map.apiproxy.RegisterStub('datastore_v3', stub)
+    mc_stub = memcache_stub.MemcacheServiceStub()
+    apiproxy_stub_map.apiproxy.RegisterStub('memcache', mc_stub)
     self.conn = model.make_connection()
+
+  def testLargeValues(self):
+    class Demo(model.Model):
+      bytes = model.BlobProperty()
+      text = model.TextProperty()
+    x = Demo(bytes='x'*1000, text=u'a'*1000)
+    key = x.put()
+    y = key.get()
+    self.assertEqual(x, y)
+    self.assertTrue(isinstance(y.bytes, str))
+    self.assertTrue(isinstance(y.text, unicode))
 
   def testMultipleStructuredProperty(self):
     class Address(model.Model):

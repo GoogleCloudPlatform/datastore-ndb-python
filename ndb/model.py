@@ -30,7 +30,7 @@ To update an entity, simple change its attributes and write it back
   p2.name = 'Arthur Philip Dent'
   p2.put()
 
-We can also delete an entity:
+We can also delete an entity (by using the key):
 
   k.delete()
 
@@ -38,8 +38,8 @@ The property definitions in the class body tell the system the names
 and the types of the fields to be stored in the datastore, whether
 they must be indexed, their default value, and more.
 
-Many different Property types exist, including StringProperty
-(strings), IntegerProperty (64-bit signed integers), FloatProperties
+Many different Property types exist, including StringProperty (short
+strings), IntegerProperty (64-bit signed integers), FloatProperty
 (double precision floating point numbers).  Some more specialized
 properties also exist: TextProperty represents a longer string that is
 not indexed (StringProperty is limited to 500 bytes); BlobProperty
@@ -50,7 +50,7 @@ later.
 
 TODO: DatetimeProperty, GeoPointProperty, UserProperty, etc.
 
-Most Property classes have the same constructor signature.  They
+Most Property classes have similar constructor signatures.  They
 accept several optional keyword arguments: name=<string> to change the
 name used to store the property value in the datastore,
 indexed=<boolean> to indicate whether the property should be indexed
@@ -73,7 +73,6 @@ __author__ = 'guido@google.com (Guido van Rossum)'
 
 # TODO: docstrings, style.
 # TODO: Change asserts to better exceptions.
-# TODO: validation; at least reject bad property types upon assignment
 # TODO: reject unknown property names in assignment (for Model) (?)
 
 import copy
@@ -672,6 +671,8 @@ class StringProperty(Property):
     if isinstance(value, unicode):
       value = value.encode('utf-8')
     v.set_stringvalue(value)
+    if not self._indexed:
+      p.set_meaning(entity_pb.Property.TEXT)
 
   def DbGetValue(self, v, p):
     if not v.has_stringvalue():
@@ -714,6 +715,8 @@ class BlobProperty(Property):
   def DbSetValue(self, v, p, value):
     assert isinstance(value, str)
     v.set_stringvalue(value)
+    if not self._indexed:
+      p.set_meaning(entity_pb.Property.BLOB)
 
   def DbGetValue(self, v, p):
     if not v.has_stringvalue():
