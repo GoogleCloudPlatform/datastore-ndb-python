@@ -140,8 +140,9 @@ import ndb.key
 
 Key = ndb.key.Key  # For export.
 
-# Property and Error classes are added later.
-__all__ = ['Key', 'ModelAdapter', 'MetaModel', 'Model', 'Expando']
+# NOTE: Property and Error classes are added later.
+__all__ = ['Key', 'ModelAdapter', 'MetaModel', 'Model', 'Expando',
+           'transaction', 'transaction_async']
 
 
 class KindError(datastore_errors.BadValueError):
@@ -1557,6 +1558,50 @@ class Expando(Model):
     prop._code_name = name
     self._properties[name] = prop
     prop.SetValue(self, value)
+
+
+@datastore_rpc._positional(1)
+def transaction(callback, retry=None, entity_group=None):
+  """Run a callback in a transaction.
+
+  Args:
+    callback: A function or tasklet to be called.
+    retry: Optional retry count (keyword only; default set by
+      ndb.context.Context.transaction()).
+    entity_group: Optional root key to use as transaction entity group
+      (keyword only; defaults to the root part of the first key used
+      in the transaction).
+
+  Returns:
+    Whatever callback() returns.
+
+  Raises:
+    Whatever callback() raises; datastore_errors.TransactionFailedError
+    if the transaction failed.
+
+  Note:
+    To pass arguments to a callback function, use a lambda, e.g.
+      def my_callback(key, inc):
+        ...
+      transaction(lambda: my_callback(Key(...), 1))
+  """
+  fut = transaction_async(callback, retry=retry, entity_group=entity_group)
+  return fut.get_result()
+
+
+@datastore_rpc._positional(1)
+def transaction_async(callback, retry=None, entity_group=None):
+  """Run a callback in a transaction.
+
+  This is the asynchronous version of transaction().
+  """
+  from ndb import tasklets
+  kwds = {}
+  if retry is not None:
+    kwds['retry'] = retry
+  if entity_group is not None:
+    kwds['entity_group'] = entity_group
+  return tasklets.get_context().transaction(callback, **kwds)
 
 
 # Update __all__ to contain all Property and Exception subclasses.

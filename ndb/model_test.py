@@ -1492,6 +1492,33 @@ class ModelTests(test_utils.DatastoreTest):
     self.assertRaises(datastore_errors.BadValueError, MyModel.get_by_id,
                       'bar', parent=1)
 
+  def testTransaction(self):
+    class MyModel(model.Model):
+      text = model.StringProperty()
+
+    key = model.Key(MyModel, 'babaz')
+    self.assertEqual(key.get(), None)
+
+    def callback():
+      # Emulate get_or_insert()
+      a = key.get()
+      if a is None:
+        a = MyModel(text='baz', key=key)
+        a.put()
+      return a
+
+    b = model.transaction(callback)
+    self.assertNotEqual(b, None)
+    self.assertEqual(b.text, 'baz')
+    self.assertEqual(key.get(), b)
+
+    key = model.Key(MyModel, 'bababaz')
+    self.assertEqual(key.get(), None)
+    c = model.transaction(callback, retry=0, entity_group=key)
+    self.assertNotEqual(c, None)
+    self.assertEqual(c.text, 'baz')
+    self.assertEqual(key.get(), c)
+
 
 def main():
   unittest.main()
