@@ -42,6 +42,19 @@ repeatedly calling .filter():
   q2 = q1.filter(Employee.age >= 30)  # Only those over 30
   q3 = q2.filter(Employee.age < 40)  # Only those in their 30s
 
+A further shortcut is calling .filter() with multiple arguments; this
+implies AND():
+
+  q1 = Employee.query()  # A query that returns all employees
+  q3 = q1.filter(Employee.age >= 30,
+                 Employee.age < 40)  # Only those in their 30s
+
+And finally you can also pass one or more filter expressions directly
+to the .query() method:
+
+  q3 = Employee.query(Employee.age >= 30,
+                      Employee.age < 40)  # Only those in their 30s
+
 Query objects are immutable, so these methods always return a new
 Query object; the above calls to filter() do not affect q1.
 
@@ -51,6 +64,10 @@ calls may be intermixed:
   q4 = q3.order(-Employee.age)
   q5 = q4.order(Employee.name)
   q6 = q5.filter(Employee.rank == 5)
+
+Again, multiple .order() calls can be combined:
+
+  q5 = q3.order(-Employee.age, Employee.name)
 
 The simplest way to retrieve Query results is a for-loop:
 
@@ -390,7 +407,7 @@ def AND(*args):
 
 def OR(*args):
   assert args
-  assert all(isinstance(Node, arg) for arg in args)
+  assert all(isinstance(arg, Node) for arg in args)
   if len(args) == 1:
     return args[0]
   return DisjunctionNode(args)
@@ -531,8 +548,7 @@ class Query(object):
     orig_options = options
     if (post_filters and options is not None and
         (options.offset or options.limit is not None)):
-      options = datastore_query.QueryOptions(offset=None, limit=None,
-                                             config=orig_options)
+      options = QueryOptions(offset=None, limit=None, config=orig_options)
       assert options.limit is None and options.limit is None
     rpc = dsqry.run_async(conn, options)
     skipped = 0
@@ -603,8 +619,6 @@ class Query(object):
       pred = ConjunctionNode(preds)
     return self.__class__(kind=self.kind, ancestor=self.ancestor,
                           orders=self.orders, filters=pred)
-
-  # TODO: Change this to .order(<property>, -<property>, ...).
 
   def order(self, *args):
     # q.order(Eployee.name, -Employee.age)

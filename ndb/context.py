@@ -128,7 +128,7 @@ class Context(object):
     results = yield self._conn.async_put(None, ents)
     for key, (fut, ent) in zip(results, todo):
       if key != ent.key:
-        if ent.has_complete_key():
+        if ent._has_complete_key():
           raise datastore_errors.BadKeyError(
               'Entity key differs from the one returned by the datastore. '
               'Expected %r, got %r' % (key, ent.key))
@@ -414,7 +414,7 @@ def toplevel(func):
   webapp.RequestHandler.get() or Django view functions.
   """
   @utils.wrapping(func)
-  def add_context_wrapper(*args):
+  def add_context_wrapper(*args, **kwds):
     __ndb_debug__ = utils.func_info(func)
     tasklets.Future.clear_all_pending()
     # Reset context; a new one will be created on the first call to
@@ -422,16 +422,7 @@ def toplevel(func):
     tasklets.set_context(None)
     ctx = tasklets.get_context()
     try:
-      return tasklets.synctasklet(func)(*args)
+      return tasklets.synctasklet(func)(*args, **kwds)
     finally:
       eventloop.run()  # Ensure writes are flushed, etc.
   return add_context_wrapper
-
-
-# Transaction API using the default context.
-
-def transaction(callback):
-  return transaction_async(callback).get_result()
-
-def transaction_async(callback):
-  return tasklets.get_context().transaction(callback)
