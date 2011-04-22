@@ -276,7 +276,7 @@ import ndb.key
 Key = ndb.key.Key  # For export.
 
 # NOTE: Property and Error classes are added later.
-__all__ = ['Key', 'ModelAdapter', 'MetaModel', 'Model', 'Expando',
+__all__ = ['Key', 'ModelAdapter', 'ModelKey', 'MetaModel', 'Model', 'Expando',
            'transaction', 'transaction_async',
            'get_multi', 'get_multi_async',
            'put_multi', 'put_multi_async',
@@ -479,8 +479,8 @@ class Property(object):
 
       Employee.query(Employee.rank.IN([4, 5, 6]))
 
-    Note that the method is called .IN_() but may normally be invoked
-    as .IN(); .IN_() is provided for the case you have a
+    Note that the method is called ._IN() but may normally be invoked
+    as .IN(); ._IN() is provided for the case you have a
     StructuredProperty with a model that has a Property named IN.
     """
     from ndb.query import FilterNode  # Import late to avoid circular imports.
@@ -731,6 +731,7 @@ class Property(object):
 
 def _validate_key(value, entity=None):
   if not isinstance(value, Key):
+    # TODO: BadKeyError.
     raise datastore_errors.BadValueError('Expected Key, got %r' % value)
   if entity and entity.__class__ not in (Model, Expando):
     if value.kind() != entity._get_kind():
@@ -741,6 +742,7 @@ def _validate_key(value, entity=None):
 
 class ModelKey(Property):
   """Special property to store the Model key."""
+
   def __init__(self):
     self._name = '__key__'
 
@@ -748,9 +750,12 @@ class ModelKey(Property):
     from ndb.query import FilterNode  # Import late to avoid circular imports.
     if value is not None:
       value = self._validate(value)
+      # TODO: Move this magic into FilterNode.
       return FilterNode(self._name, op, datastore_types.Key(value.urlsafe()))
     raise datastore_errors.BadValueError(
         "__key__ filter query can't be compared to None")
+
+  # TODO: Support IN().
 
   def _validate(self, value):
     return _validate_key(value)
@@ -1564,9 +1569,11 @@ class Model(object):
   _kind_map = {}  # Dict mapping {kind: Model subclass}
 
   # Defaults for instance variables.
-  key = ModelKey() # Special key property
   _key = None
   _values = None
+
+  # Hardcoded pseudo-property for the key.
+  key = ModelKey()
 
   @datastore_rpc._positional(1)
   def __init__(self, key=None, id=None, parent=None, **kwds):
@@ -1596,8 +1603,6 @@ class Model(object):
       if parent is not None:
         raise datastore_errors.BadArgumentError(
             'Model constructor accepts key or parent, not both.')
-      # Using _validate_key() here to trigger the basic Key checks.
-      # self.key = key doesn't work because of Expando's __setattr__().
       self._key = _validate_key(key, entity=self)
     elif id is not None or parent is not None:
       # When parent is set but id is not, we have an incomplete key.
@@ -1833,6 +1838,7 @@ class Model(object):
           cls._has_repeated = True
         cls._properties[prop._name] = prop
     if not has_key:
+      # TODO: Do we care?
       raise datastore_errors.BadValueError("Model doesn't have a ModelKey.")
     cls._kind_map[cls._get_kind()] = cls
 
