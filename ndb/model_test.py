@@ -8,6 +8,7 @@ import re
 import unittest
 
 from google.appengine.api import datastore_errors
+from google.appengine.api import datastore_types
 from google.appengine.api import namespace_manager
 from google.appengine.api import users
 from google.appengine.datastore import entity_pb
@@ -686,6 +687,19 @@ class ModelTests(test_utils.DatastoreTest):
                         model.StringProperty,
                         repeated=True, required=True, default='')
 
+  def testBlobKeyProperty(self):
+    class MyModel(model.Model):
+      image = model.BlobKeyProperty()
+    test_blobkey = datastore_types.BlobKey('testkey123')
+    m = MyModel()
+    m.image = test_blobkey
+    m.put()
+
+    m = m.key.get()
+
+    self.assertTrue(isinstance(m.image, datastore_types.BlobKey))
+    self.assertEqual(str(m.image), str(test_blobkey))
+
   def testChoicesProperty(self):
     class MyModel(model.Model):
       a = model.StringProperty(choices=['a', 'b', 'c'])
@@ -734,13 +748,6 @@ class ModelTests(test_utils.DatastoreTest):
     self.assertEqual(ent.key, k)
     self.assertEqual(MyModel.t._get_value(ent), u'Hello world\u1234')
     self.assertEqual(MyModel.b._get_value(ent), '\x00\xff')
-
-  def testGeoPt(self):
-    # Test for the GeoPt type itself.
-    p = model.GeoPt(3.14, 42)
-    self.assertEqual(p.lat, 3.14)
-    self.assertEqual(p.lon, 42.0)
-    self.assertEqual(repr(p), 'GeoPt(3.14, 42)')
 
   def DateAndOrTimePropertyTest(self, propclass, t1, t2):
     class Person(model.Model):
@@ -1231,6 +1238,82 @@ class ModelTests(test_utils.DatastoreTest):
     self.assertTrue(p.address is None)
     self.assertEqual(p.name, 'Google')
 
+  def testLocalStructuredPropertyCompressed(self):
+    class Address(model.Model):
+      street = model.StringProperty()
+      city = model.StringProperty()
+    class Person(model.Model):
+      name = model.StringProperty()
+      address = model.LocalStructuredProperty(Address, compressed=True)
+
+    k = model.Key('Person', 'google')
+    p = Person(key=k)
+    p.name = 'Google'
+    p.address = Address(street='1600 Amphitheatre', city='Mountain View')
+    p.put()
+
+    # Putting and getting to test compression and deserialization.
+    p = k.get()
+    p.put()
+
+    p = k.get()
+    self.assertEqual(p.name, 'Google')
+    self.assertEqual(p.address.street, '1600 Amphitheatre')
+    self.assertEqual(p.address.city, 'Mountain View')
+
+  def testLocalStructuredPropertyRepeated(self):
+    class Address(model.Model):
+      street = model.StringProperty()
+      city = model.StringProperty()
+    class Person(model.Model):
+      name = model.StringProperty()
+      address = model.LocalStructuredProperty(Address, repeated=True)
+
+    k = model.Key('Person', 'google')
+    p = Person(key=k)
+    p.name = 'Google'
+    p.address.append(Address(street='1600 Amphitheatre', city='Mountain View'))
+    p.address.append(Address(street='Webb crater', city='Moon'))
+    p.put()
+
+    # Putting and getting to test compression and deserialization.
+    p = k.get()
+    p.put()
+
+    p = k.get()
+    self.assertEqual(p.name, 'Google')
+    self.assertEqual(p.address[0].street, '1600 Amphitheatre')
+    self.assertEqual(p.address[0].city, 'Mountain View')
+    self.assertEqual(p.address[1].street, 'Webb crater')
+    self.assertEqual(p.address[1].city, 'Moon')
+
+  def testLocalStructuredPropertyRepeatedCompressed(self):
+    class Address(model.Model):
+      street = model.StringProperty()
+      city = model.StringProperty()
+    class Person(model.Model):
+      name = model.StringProperty()
+      address = model.LocalStructuredProperty(Address, repeated=True,
+                                              compressed=True)
+
+    k = model.Key('Person', 'google')
+    p = Person(key=k)
+    p.name = 'Google'
+    p.address.append(Address(street='1600 Amphitheatre', city='Mountain View'))
+    p.address.append(Address(street='Webb crater', city='Moon'))
+    p.put()
+
+    # Putting and getting to test compression and deserialization.
+    p = k.get()
+    p.put()
+
+    p = k.get()
+    self.assertEqual(p.name, 'Google')
+    self.assertEqual(p.address[0].street, '1600 Amphitheatre')
+    self.assertEqual(p.address[0].city, 'Mountain View')
+    self.assertEqual(p.address[1].street, 'Webb crater')
+    self.assertEqual(p.address[1].city, 'Moon')
+
   def testEmptyList(self):
     class Person(model.Model):
       name = model.StringProperty(repeated=True)
@@ -1377,7 +1460,7 @@ class ModelTests(test_utils.DatastoreTest):
       name_lower = model.ComputedProperty(lambda self: self.name.lower())
 
       @model.ComputedProperty
-      def size(self):
+      def length(self):
         return len(self.name)
 
       def _compute_hash(self):
@@ -1397,7 +1480,7 @@ class ModelTests(test_utils.DatastoreTest):
     m = ComputedTest._from_pb(pb)
     self.assertEqual(m.name, 'Foobar')
     self.assertEqual(m.name_lower, 'foobar')
-    self.assertEqual(m.size, 6)
+    self.assertEqual(m.length, 6)
     self.assertEqual(m.hash, hash('Foobar'))
 
   def testLargeValues(self):
@@ -1568,9 +1651,10 @@ class ModelTests(test_utils.DatastoreTest):
     self.assertEqual(key.get(), c)
 
   def testGetMultiAsync(self):
-    ent1 = model.Model(key=model.Key('MyModel', 1))
-    ent2 = model.Model(key=model.Key('MyModel', 2))
-    ent3 = model.Model(key=model.Key('MyModel', 3))
+    model.Model._kind_map['Model'] = model.Model
+    ent1 = model.Model(key=model.Key('Model', 1))
+    ent2 = model.Model(key=model.Key('Model', 2))
+    ent3 = model.Model(key=model.Key('Model', 3))
     key1 = ent1.put()
     key2 = ent2.put()
     key3 = ent3.put()
@@ -1584,9 +1668,10 @@ class ModelTests(test_utils.DatastoreTest):
     self.assertEqual(res, [ent1, ent2, ent3])
 
   def testGetMulti(self):
-    ent1 = model.Model(key=model.Key('MyModel', 1))
-    ent2 = model.Model(key=model.Key('MyModel', 2))
-    ent3 = model.Model(key=model.Key('MyModel', 3))
+    model.Model._kind_map['Model'] = model.Model
+    ent1 = model.Model(key=model.Key('Model', 1))
+    ent2 = model.Model(key=model.Key('Model', 2))
+    ent3 = model.Model(key=model.Key('Model', 3))
     key1 = ent1.put()
     key2 = ent2.put()
     key3 = ent3.put()
@@ -1595,9 +1680,9 @@ class ModelTests(test_utils.DatastoreTest):
     self.assertEqual(res, [ent1, ent2, ent3])
 
   def testPutMultiAsync(self):
-    ent1 = model.Model(key=model.Key('MyModel', 1))
-    ent2 = model.Model(key=model.Key('MyModel', 2))
-    ent3 = model.Model(key=model.Key('MyModel', 3))
+    ent1 = model.Model(key=model.Key('Model', 1))
+    ent2 = model.Model(key=model.Key('Model', 2))
+    ent3 = model.Model(key=model.Key('Model', 3))
 
     @tasklets.tasklet
     def foo():
@@ -1608,17 +1693,18 @@ class ModelTests(test_utils.DatastoreTest):
     self.assertEqual(res, [ent1.key, ent2.key, ent3.key])
 
   def testPutMulti(self):
-    ent1 = model.Model(key=model.Key('MyModel', 1))
-    ent2 = model.Model(key=model.Key('MyModel', 2))
-    ent3 = model.Model(key=model.Key('MyModel', 3))
+    ent1 = model.Model(key=model.Key('Model', 1))
+    ent2 = model.Model(key=model.Key('Model', 2))
+    ent3 = model.Model(key=model.Key('Model', 3))
 
     res = model.put_multi((ent1, ent2, ent3))
     self.assertEqual(res, [ent1.key, ent2.key, ent3.key])
 
   def testDeleteMultiAsync(self):
-    ent1 = model.Model(key=model.Key('MyModel', 1))
-    ent2 = model.Model(key=model.Key('MyModel', 2))
-    ent3 = model.Model(key=model.Key('MyModel', 3))
+    model.Model._kind_map['Model'] = model.Model
+    ent1 = model.Model(key=model.Key('Model', 1))
+    ent2 = model.Model(key=model.Key('Model', 2))
+    ent3 = model.Model(key=model.Key('Model', 3))
     key1 = ent1.put()
     key2 = ent2.put()
     key3 = ent3.put()
@@ -1638,9 +1724,10 @@ class ModelTests(test_utils.DatastoreTest):
     self.assertEqual(key3.get(), None)
 
   def testDeleteMulti(self):
-    ent1 = model.Model(key=model.Key('MyModel', 1))
-    ent2 = model.Model(key=model.Key('MyModel', 2))
-    ent3 = model.Model(key=model.Key('MyModel', 3))
+    model.Model._kind_map['Model'] = model.Model
+    ent1 = model.Model(key=model.Key('Model', 1))
+    ent2 = model.Model(key=model.Key('Model', 2))
+    ent3 = model.Model(key=model.Key('Model', 3))
     key1 = ent1.put()
     key2 = ent2.put()
     key3 = ent3.put()
@@ -1752,6 +1839,98 @@ class ModelTests(test_utils.DatastoreTest):
     self.assertEqual(res, m)
     self.assertEqual(res.key, 'bar')
     self.assertEqual(res.real_key, k)
+
+  def testTransactionalDecorator(self):
+    # This tests @model.transactional and model.in_transaction(), and
+    # indirectly context.Context.in_transaction().
+    logs = []
+    @model.transactional
+    def foo(a, b):
+      self.assertTrue(model.in_transaction())
+      logs.append(tasklets.get_context()._conn)  # White box
+      return a + b
+    @model.transactional
+    def bar(a):
+      self.assertTrue(model.in_transaction())
+      logs.append(tasklets.get_context()._conn)  # White box
+      return foo(a, 42)
+    before = tasklets.get_context()._conn
+    self.assertFalse(model.in_transaction())
+    x = bar(100)
+    self.assertFalse(model.in_transaction())
+    after = tasklets.get_context()._conn
+    self.assertEqual(before, after)
+    self.assertEqual(x, 142)
+    self.assertEqual(len(logs), 2)
+    self.assertEqual(logs[0], logs[1])
+    self.assertNotEqual(before, logs[0])
+
+  def testPropertyFilters(self):
+    class M(model.Model):
+      dt = model.DateTimeProperty()
+      d = model.DateProperty()
+      t = model.TimeProperty()
+      f = model.FloatProperty()
+      s = model.StringProperty()
+      k = model.KeyProperty()
+      b = model.BooleanProperty()
+      i = model.IntegerProperty()
+      g = model.GeoPtProperty()
+      @model.ComputedProperty
+      def c(self):
+        if self.i is None:
+          return None
+        return self.i + 1
+      u = model.UserProperty()
+
+    values = {
+      'dt': datetime.datetime.now(),
+      'd': datetime.date.today(),
+      't': datetime.datetime.now().time(),
+      'f': 4.2,
+      's': 'foo',
+      'k': model.Key('Foo', 'bar'),
+      'b': False,
+      'i': 42,
+      'g': AMSTERDAM,
+      'u': TESTUSER,
+    }
+
+    m = M(**values)
+    m.put()
+
+    q = M.query(M.dt == values['dt'])
+    self.assertEqual(q.get(), m)
+
+    q = M.query(M.d == values['d'])
+    self.assertEqual(q.get(), m)
+
+    q = M.query(M.t == values['t'])
+    self.assertEqual(q.get(), m)
+
+    q = M.query(M.f == values['f'])
+    self.assertEqual(q.get(), m)
+
+    q = M.query(M.s == values['s'])
+    self.assertEqual(q.get(), m)
+
+    q = M.query(M.k == values['k'])
+    self.assertEqual(q.get(), m)
+
+    q = M.query(M.b == values['b'])
+    self.assertEqual(q.get(), m)
+
+    q = M.query(M.i == values['i'])
+    self.assertEqual(q.get(), m)
+
+    q = M.query(M.g == values['g'])
+    self.assertEqual(q.get(), m)
+
+    q = M.query(M.c == values['i'] + 1)
+    self.assertEqual(q.get(), m)
+
+    q = M.query(M.u == values['u'])
+    self.assertEqual(q.get(), m)
 
 
 def main():
