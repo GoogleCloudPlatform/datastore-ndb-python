@@ -7,6 +7,7 @@ import time
 import unittest
 
 from google.appengine.api import apiproxy_stub_map
+from google.appengine.api import datastore_errors
 from google.appengine.api import datastore_file_stub
 from google.appengine.api.memcache import memcache_stub
 from google.appengine.datastore import datastore_rpc
@@ -294,6 +295,68 @@ class QueryTests(test_utils.DatastoreTest):
     qo = query.QueryOptions(keys_only=True)
     q = query.Query(kind='Foo').filter(Foo.tags == 'jill').order(Foo.name)
     self.assertEqual(q.get(options=qo), self.jill.key)
+
+  def testCursors(self):
+    qo = query.QueryOptions(produce_cursors=True)
+    q = query.Query(kind='Foo')
+    it = q.iter(options=qo)
+    expected = [self.joe, self.jill, self.moe]
+    self.assertRaises(datastore_errors.BadArgumentError, it.cursor_before)
+    self.assertRaises(datastore_errors.BadArgumentError, it.cursor_after)
+    before = []
+    after = []
+    for i, ent in enumerate(it):
+      self.assertEqual(ent, expected[i])
+      before.append(it.cursor_before())
+      after.append(it.cursor_after())
+    before.append(it.cursor_before())
+    after.append(it.cursor_after())
+    self.assertEqual(before[1], after[0])
+    self.assertEqual(before[2], after[1])
+    self.assertEqual(before[3], after[2])
+    self.assertEqual(before[3], after[3])  # !!!
+
+  def testCursorsKeysOnly(self):
+    qo = query.QueryOptions(produce_cursors=True, keys_only=True)
+    q = query.Query(kind='Foo')
+    it = q.iter(options=qo)
+    expected = [self.joe.key, self.jill.key, self.moe.key]
+    self.assertRaises(datastore_errors.BadArgumentError, it.cursor_before)
+    self.assertRaises(datastore_errors.BadArgumentError, it.cursor_after)
+    before = []
+    after = []
+    for i, ent in enumerate(it):
+      self.assertEqual(ent, expected[i])
+      before.append(it.cursor_before())
+      after.append(it.cursor_after())
+    before.append(it.cursor_before())
+    after.append(it.cursor_after())
+    self.assertEqual(before[1], after[0])
+    self.assertEqual(before[2], after[1])
+    self.assertEqual(before[3], after[2])
+    self.assertEqual(before[3], after[3])  # !!!
+
+  def testCursorsEfficientPaging(self):
+    # We want to read a 'page' of data, get the cursor just past the
+    # page, and know whether there is another page, all with a single
+    # RPC.  To do this, set limit=pagesize+1, batch_size=pagesize.
+    q = query.Query(kind='Foo')
+    cursors = {}
+    mores = {}
+    for pagesize in [1, 2, 3, 4]:
+      qo = query.QueryOptions(produce_cursors=True, limit=pagesize+1,
+                              batch_size=pagesize)
+      it = q.iter(options=qo)
+      todo = pagesize
+      for ent in it:
+        todo -= 1
+        if todo <= 0:
+          break
+      cursors[pagesize] = it.cursor_after()
+      mores[pagesize] = it.probably_has_next()
+    self.assertEqual(mores, {1: True, 2: True, 3: False, 4: False})
+    self.assertEqual(cursors[3], cursors[4])
+    # TODO: Assert that only one RPC call was made.
 
   def testCount(self):
     q = query.Query(kind='Foo').filter(Foo.tags == 'jill').order(Foo.name)
