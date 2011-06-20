@@ -412,8 +412,7 @@ class ContextTests(test_utils.DatastoreTest):
     key = model.Key('Foo', 1)
     @tasklets.tasklet
     def foo():
-      ent = model.Expando(bar=1)
-      yield self.ctx.put(ent)
+      ent = model.Expando(key=key, bar=1)
       @tasklets.tasklet
       def callback():
         ctx = tasklets.get_context()
@@ -427,8 +426,7 @@ class ContextTests(test_utils.DatastoreTest):
     key = model.Key('Foo', 1)
     @tasklets.tasklet
     def foo():
-      ent = model.Expando(bar=1)
-      yield self.ctx.put(ent)
+      ent = model.Expando(key=key, bar=1)
       @tasklets.tasklet
       def callback():
         ctx = tasklets.get_context()
