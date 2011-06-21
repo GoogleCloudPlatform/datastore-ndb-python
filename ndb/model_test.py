@@ -1314,6 +1314,19 @@ class ModelTests(test_utils.DatastoreTest):
     self.assertEqual(p.address[1].street, 'Webb crater')
     self.assertEqual(p.address[1].city, 'Moon')
 
+  def testLocalStructuredPropertyRepeatedRepeated(self):
+    class Inner(model.Model):
+      a = model.IntegerProperty(repeated=True)
+    self.assertTrue(Inner._has_repeated)
+    class Outer(model.Model):
+      b = model.LocalStructuredProperty(Inner, repeated=True)
+    self.assertTrue(Inner._has_repeated)
+    x = Outer(b=[Inner(a=[1, 2]), Inner(a=[3, 4, 5])])
+    k = x.put()
+    y = k.get()
+    self.assertTrue(x is not y)
+    self.assertEqual(x, y)
+
   def testEmptyList(self):
     class Person(model.Model):
       name = model.StringProperty(repeated=True)
