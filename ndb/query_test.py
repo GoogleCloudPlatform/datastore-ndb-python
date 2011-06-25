@@ -90,6 +90,23 @@ class QueryTests(test_utils.DatastoreTest):
     q1 = q.filter(Foo.rate == 1, Foo.name == 'x')
     q2 = q1.order(-Foo.rate)
 
+  def testRunToQueue(self):
+    qry = Foo.query()
+    queue = tasklets.MultiFuture()
+    qry.run_to_queue(queue, self.conn).check_success()
+    results = queue.get_result()
+    self.assertEqual(len(results), 3)
+    self.assertEqual(results[0][2], self.joe)
+    self.assertEqual(results[1][2], self.jill)
+    self.assertEqual(results[2][2], self.moe)
+
+  def testRunToQueueError(self):
+    qry = Foo.query(Foo.name > '', Foo.rate > 0)
+    queue = tasklets.MultiFuture()
+    fut = qry.run_to_queue(queue, self.conn)
+    self.assertRaises(datastore_errors.BadRequestError, fut.check_success)
+    self.assertRaises(datastore_errors.BadRequestError, queue.check_success)
+
   def testModernQuerySyntax(self):
     class Employee(model.Model):
       name = model.StringProperty()
