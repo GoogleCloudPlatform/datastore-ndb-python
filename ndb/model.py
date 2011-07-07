@@ -913,6 +913,9 @@ _MEANING_URI_COMPRESSED = 'ZLIB'
 class _CompressedValue(str):
   """Used as a flag for compressed values."""
 
+  def __repr__(self):
+    return '_CompressedValue(%s)' % super(_CompressedValue, self).__repr__()
+
 
 class CompressedPropertyMixin(object):
   """A mixin to store the property value compressed using zlib."""
