@@ -1871,38 +1871,38 @@ class ModelTests(test_utils.DatastoreTest):
     self.assertEqual(memcache.get(ctx._memcache_prefix + key.urlsafe()),
                      ent._to_pb())
     # Get it bypassing the in-process cache.
-    ent_copy = key.get(ndb_should_cache=False)
+    ent_copy = key.get(use_cache=False)
     self.assertEqual(ent_copy, ent)
     self.assertFalse(ent_copy is ent)
     # Put it bypassing both caches.
     ent_copy.name = 'yoyo'
-    ent_copy.put(ndb_should_cache=False, ndb_should_memcache=False)
+    ent_copy.put(use_cache=False, use_memcache=False)
     # Get it from the in-process cache.
     ent2 = key.get()
     self.assertTrue(ent2 is ent)
     self.assertEqual(ent2.name, 'yo')
     self.assertEqual(ent_copy.name, 'yoyo')  # Should not have changed.
     # Get it from memcache.
-    ent3 = key.get(ndb_should_cache=False)
+    ent3 = key.get(use_cache=False)
     self.assertFalse(ent3 is ent)
     self.assertFalse(ent3 is ent2)
     self.assertEqual(ent3.name, 'yo')
     self.assertEqual(ent_copy.name, 'yoyo')  # Should not have changed.
     # Get it from the datastore.
-    ent4 = key.get(ndb_should_cache=False, ndb_should_memcache=False)
+    ent4 = key.get(use_cache=False, use_memcache=False)
     self.assertFalse(ent4 is ent)
     self.assertFalse(ent4 is ent2)
     self.assertFalse(ent4 is ent3)
     self.assertFalse(ent4 is ent_copy)
     self.assertEqual(ent4.name, 'yoyo')
     # Delete it from the datastore but leave it in the caches.
-    key.delete(ndb_should_cache=False, ndb_should_memcache=False)
+    key.delete(use_cache=False, use_memcache=False)
     # Assure it is gone from the datastore.
     [ent5] = model.get_multi([key],
-                             ndb_should_cache=False, ndb_should_memcache=False)
+                             use_cache=False, use_memcache=False)
     self.assertEqual(ent5, None)
     # Assure it is still in memcache.
-    ent6 = key.get(ndb_should_cache=False)
+    ent6 = key.get(use_cache=False)
     self.assertEqual(ent6.name, 'yo')
     self.assertEqual(memcache.get(ctx._memcache_prefix + key.urlsafe()),
                      ent._to_pb())
@@ -1911,9 +1911,9 @@ class ModelTests(test_utils.DatastoreTest):
     self.assertEqual(ent7.name, 'yo')
     self.assertTrue(ctx._cache[key] is ent7)
     # Delete it from memcache.
-    model.delete_multi([key], ndb_should_cache=False)
+    model.delete_multi([key], use_cache=False)
     # Assure it is gone from memcache.
-    ent8 = key.get(ndb_should_cache=False)
+    ent8 = key.get(use_cache=False)
     self.assertEqual(ent8, None)
     # Assure it is still in the in-memory cache.
     ent9 = key.get()
@@ -1956,12 +1956,12 @@ class ModelTests(test_utils.DatastoreTest):
       memcache.set_multi = mock_memcache_set_multi
       ctx._conn.async_put = mock_conn_async_put
       [f1, f3] = model.put_multi_async([e1, e3],
-                                       ndb_memcache_timeout=7,
+                                       memcache_timeout=7,
                                        deadline=3)
       [f4] = model.put_multi_async([e4],
                                    deadline=2)
       [x2, x5] = model.put_multi([e2, e5],
-                                 ndb_memcache_timeout=5)
+                                 memcache_timeout=5)
       x4 = f4.get_result()
       x1 = f1.get_result()
       x3 = f3.get_result()
