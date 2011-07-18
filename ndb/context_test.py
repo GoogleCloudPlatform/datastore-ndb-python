@@ -201,9 +201,9 @@ class ContextTests(test_utils.DatastoreTest):
 
   def testContext_MemcachePolicy(self):
     badkeys = []
-    def tracking_add_multi(*args, **kwds):
+    def tracking_add_async(*args, **kwds):
       try:
-        res = save_add_multi(*args, **kwds)
+        res = save_add_async(*args, **kwds)
         if badkeys and not res:
           res = badkeys
         track.append((args, kwds, res, None))
@@ -224,10 +224,10 @@ class ContextTests(test_utils.DatastoreTest):
     key2 = model.Key('Foo', 2)
     ent1 = model.Expando(key=key1, foo=42, bar='hello')
     ent2 = model.Expando(key=key2, foo=1, bar='world')
-    save_add_multi = memcache.add_multi
+    save_add_async = self.ctx._memcache.add_async
     try:
-      memcache.add_multi = tracking_add_multi
-      memcache.flush_all()
+      self.ctx._memcache.add_async = tracking_add_async
+      yield self.ctx._memcache.flush_all_async()
 
       track = []
       foo().check_success()
@@ -236,13 +236,13 @@ class ContextTests(test_utils.DatastoreTest):
                        ({key1.urlsafe(): ent1._to_pb(),
                          key2.urlsafe(): ent2._to_pb()},))
       self.assertEqual(track[0][1], {'key_prefix': 'NDB:', 'time': 0})
-      memcache.flush_all()
+      yield self.ctx._memcache.flush_all_async()
 
       track = []
       self.ctx.set_memcache_policy(lambda key: False)
       foo().check_success()
       self.assertEqual(len(track), 0)
-      memcache.flush_all()
+      yield self.ctx._memcache.flush_all_async()
 
       track = []
       self.ctx.set_memcache_policy(lambda key: key == key1)
@@ -251,7 +251,7 @@ class ContextTests(test_utils.DatastoreTest):
       self.assertEqual(track[0][0],
                        ({key1.urlsafe(): ent1._to_pb()},))
       self.assertEqual(track[0][1], {'key_prefix': 'NDB:', 'time': 0})
-      memcache.flush_all()
+      yield self.ctx._memcache.flush_all_async()
 
       track = []
       self.ctx.set_memcache_policy(lambda key: True)
@@ -264,7 +264,7 @@ class ContextTests(test_utils.DatastoreTest):
       self.assertEqual(track[1][0],
                        ({key2.urlsafe(): ent2._to_pb()},))
       self.assertEqual(track[1][1], {'key_prefix': 'NDB:', 'time': 2})
-      memcache.flush_all()
+      yield self.ctx._memcache.flush_all_async()
 
       track = []
       badkeys = [key2.urlsafe()]
@@ -272,9 +272,9 @@ class ContextTests(test_utils.DatastoreTest):
       foo().check_success()
       self.assertEqual(len(track), 1)
       self.assertEqual(track[0][2], badkeys)
-      memcache.flush_all()
+      yield self.ctx._memcache.flush_all_async()
     finally:
-      memcache.add_multi = save_add_multi
+      self.ctx._memcache.add_async = save_add_async
 
   def testContext_CacheQuery(self):
     @tasklets.tasklet
