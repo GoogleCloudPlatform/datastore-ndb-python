@@ -29,9 +29,9 @@ class MyAutoBatcher(context.AutoBatcher):
     cls._log = []
 
   def __init__(self, todo_tasklet):
-    def wrap(*args):
-      self.__class__._log.append(args)
-      return todo_tasklet(*args)
+    def wrap(todo):
+      self.__class__._log.append((todo_tasklet.__name__, todo))
+      return todo_tasklet(todo)
     super(MyAutoBatcher, self).__init__(wrap)
 
 
@@ -66,7 +66,14 @@ class ContextTests(test_utils.DatastoreTest):
       raise tasklets.Return([ent1, ent2, ent3])
     ents = foo().get_result()
     self.assertEqual(ents, [None, None, None])
-    self.assertEqual(len(MyAutoBatcher._log), 1)
+    log = MyAutoBatcher._log
+    self.assertEqual(len(log), 2)
+    name, todo = log[0]
+    self.assertEqual(name, '_get_tasklet')
+    self.assertEqual(len(todo), 3)
+    name, todo = log[1]
+    self.assertEqual(name, '_memcache_get_tasklet')
+    self.assertEqual(len(todo), 3)
 
   @tasklets.tasklet
   def create_entities(self):

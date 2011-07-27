@@ -17,6 +17,12 @@ from ndb import model, tasklets, eventloop, utils
 
 _LOCK_TIME = 32  # Time to lock out memcache.add() after datastore.put().
 
+_DELETE_STATUS_MAP = {
+  # Perversely, this is {1: 2, 2: 1}.
+  memcache.MemcacheDeleteResponse.DELETED: memcache.DELETE_SUCCESSFUL,
+  memcache.MemcacheDeleteResponse.NOT_FOUND: memcache.DELETE_ITEM_MISSING,
+}
+
 
 class ContextOptions(datastore_rpc.Configuration):
   """Configuration options that may be passed along with get/put/delete."""
@@ -157,6 +163,10 @@ class Context(object):
     self._get_batcher = auto_batcher_class(self._get_tasklet)
     self._put_batcher = auto_batcher_class(self._put_tasklet)
     self._delete_batcher = auto_batcher_class(self._delete_tasklet)
+    self._memcache_get_batcher = auto_batcher_class(self._memcache_get_tasklet)
+    self._memcache_set_batcher = auto_batcher_class(self._memcache_set_tasklet)
+    self._memcache_del_batcher = auto_batcher_class(self._memcache_del_tasklet)
+    self._memcache_off_batcher = auto_batcher_class(self._memcache_off_tasklet)
     self._cache = {}
     self._memcache = memcache.Client()
 
@@ -174,23 +184,22 @@ class Context(object):
   def _get_tasklet(self, todo):
     assert todo
     # First check memcache.
+    leftover = []
     memkeymap = {}
     for fut, key, options in todo:
       if self._use_memcache(key, options):
-        memkeymap[key] = key.urlsafe()
-    if memkeymap:
-      results = yield self._memcache.get_multi_async(
-        memkeymap.values(), key_prefix=self._memcache_prefix)
-      leftover = []
-      for fut, key, options in todo:
-        mkey = memkeymap.get(key)
-        if mkey is not None and mkey in results:
-          pb = results[mkey]
-          ent = self._conn.adapter.pb_to_entity(pb)
-          fut.set_result(ent)
-        else:
-          leftover.append((fut, key, options))
-      todo = leftover
+        memkey = self._memcache_prefix + key.urlsafe()
+        memkeymap[memkey] = (fut, key, options, self.memcache_get(memkey))
+      else:
+        leftover.append((fut, key, options))
+    for memkey, (fut, key, options, mfut) in memkeymap.iteritems():
+      mval = mfut.get_result()
+      if mval is None:
+        leftover.append((fut, key, options))
+      else:
+        ent = self._conn.adapter.pb_to_entity(mval)
+        fut.set_result(ent)
+    todo = leftover
     # Segregate things by ConfigOptions.
     by_options = {}
     for fut, key, options in todo:
@@ -201,6 +210,7 @@ class Context(object):
       futures.append(fut)
       keys.append(key)
     # Make the RPC calls.
+    # TODO: do the RPCs concurrently
     mappings = {}  # Maps timeout value to {urlsafe_key: pb} mapping.
     for options, (futures, keys) in by_options.iteritems():
       datastore_futures = []
@@ -222,12 +232,14 @@ class Context(object):
             if mapping is None:
               mapping = mappings[timeout] = {}
             mapping[ent._key.urlsafe()] = pb
+    # TODO: do the RPCs concurrently
     if mappings:
       # If the timeouts are not uniform, make a separate call for each
       # distinct timeout value.
       for timeout, mapping in mappings.iteritems():
         # Use add, not set.  This is a no-op within _LOCK_TIME seconds
         # of the delete done by the most recent write.
+        # XXX use self.memcache_add()
         yield self._memcache.add_multi_async(mapping, time=timeout,
                                              key_prefix=self._memcache_prefix)
 
@@ -266,16 +278,20 @@ class Context(object):
       futures.append(fut)
       entities.append(ent)
     if delete_keys:  # Pre-emptively delete from memcache.
+      # XXX use self.memcache_delete()
       yield self._memcache.delete_multi_async(delete_keys, seconds=_LOCK_TIME,
                                               key_prefix=self._memcache_prefix)
+    # TODO: do the RPCs concurrently
     if mappings:  # Write to memcache (only if use_datastore=False).
       # If the timeouts are not uniform, make a separate call for each
       # distinct timeout value.
       for timeout, mapping in mappings.iteritems():
         # Use add, not set.  This is a no-op within _LOCK_TIME seconds
         # of the delete done by the most recent write.
+        # XXX use self.memcache_add()
         yield self._memcache.add_multi_async(mapping, time=timeout,
                                              key_prefix=self._memcache_prefix)
+    # TODO: do the RPCs concurrently
     for options, (futures, entities) in by_options.iteritems():
       datastore_futures = []
       datastore_entities = []
@@ -316,8 +332,10 @@ class Context(object):
       futures.append(fut)
       keys.append(key)
     if delete_keys:  # Pre-emptively delete from memcache.
+      # XXX use self.memcache_delete()
       yield self._memcache.delete_multi_async(delete_keys, seconds=_LOCK_TIME,
                                               key_prefix=self._memcache_prefix)
+    # TODO: do the RPCs concurrently
     for options, (futures, keys) in by_options.iteritems():
       datastore_keys = []
       for key in keys:
@@ -553,7 +571,7 @@ class Context(object):
       Memcache timeout to use (integer), or None.
     """
     timeout = None
-    if key is not None:
+    if key is not None and isinstance(key, model.Key):
       modelclass = model.Model._kind_map.get(key.kind())
       if modelclass is not None:
         policy = getattr(modelclass, '_memcache_timeout', None)
@@ -798,6 +816,7 @@ class Context(object):
     keys = set(key for key in keys if self._use_memcache(key))
     if keys:
       memkeys = [key.urlsafe() for key in keys]
+      # XXX use self.memcache_delete()
       yield self._memcache.delete_multi_async(memkeys,
                                               key_prefix=self._memcache_prefix)
 
@@ -823,6 +842,146 @@ class Context(object):
         raise tasklets.Return(ent)
       ent = yield self.transaction(txn)
     raise tasklets.Return(ent)
+
+  @tasklets.tasklet
+  def _memcache_get_tasklet(self, todo):
+    assert todo
+    keys = []
+    for fut, key, options in todo:
+      keys.append(key)
+    results = yield self._memcache.get_multi_async(keys)
+    for fut, key, options in todo:
+      fut.set_result(results.get(key))
+
+  @tasklets.tasklet
+  def _memcache_set_tasklet(self, todo):
+    assert todo
+    mappings = {}  # {(opname, timeout): {key: value, ...}, ...}
+    all_results = {}
+    for fut, (opname, key, value), options in todo:
+      timeout = self._get_memcache_timeout(key, options)
+      mapping = mappings.get((opname, timeout))
+      if mapping is None:
+        mapping = mappings[opname, timeout] = {}
+      mapping[key] = value
+    # TODO: do the RPCs concurrently
+    for (opname, timeout), mapping in mappings.iteritems():
+      methodname = opname + '_multi_async'
+      method = getattr(self._memcache, methodname)
+      results = yield method(mapping, time=timeout)
+      if results:
+        all_results.update(results)
+    for fut, (opname, key, value), options in todo:
+      status = all_results.get(key)
+      fut.set_result(status)
+
+  @tasklets.tasklet
+  def _memcache_del_tasklet(self, todo):
+    assert todo
+    keys = []
+    # XXX: segregate by timeout
+    # TODO: do the RPCs concurrently
+    for fut, key, options in todo:
+      keys.append(key)
+    results = yield self._memcache.delete_multi_async(keys)
+    if not results:
+      for fut, key, options in todo:
+        fut.set_result(memcache.DELETE_NETWORK_FAILURE)
+    else:
+      for (fut, key, options), status in zip(todo, results):
+        # This will return None for unknown status values.
+        fut.set_result(_DELETE_STATUS_MAP.get(status))
+
+  @tasklets.tasklet
+  def _memcache_off_tasklet(self, todo):
+    assert todo
+    mappings = {}  # {initial_value: {key: delta, ...}, ...}
+    for fut, (key, delta, initial_value), options in todo:
+      mapping = mappings.get(initial_value)
+      if mapping is None:
+        mapping = mappings[initial_value] = {}
+      mapping[key] = delta
+    # TODO: do the RPCs concurrently
+    all_results = {}
+    for initial_value, mapping in mappings.iteritems():
+      fut = self._memcache.offset_multi_async(mapping,
+                                              initial_value=initial_value)
+      results = yield fut
+      if results:
+        all_results.update(results)
+    for fut, (key, delta, initial_value), options in todo:
+      result = all_results.get(key)
+      fut.set_result(result)
+
+  @tasklets.tasklet
+  def memcache_get(self, key, **ctx_options):
+    """An auto-batching wrapper for memcache.get() or .get_multi().
+
+    Args:
+      key: Key to set.  This must be a string; no prefix is applied.
+      **ctx_options: Context options.  XXX: Unused.
+
+    Returns:
+      The value retrieved from memcache, or None.
+    """
+    assert isinstance(key, str)
+    options = _make_ctx_options(ctx_options)
+    value = yield self._memcache_get_batcher.add(key, options)
+    raise tasklets.Return(value)
+
+  # XXX: Docstrings below.
+
+  @tasklets.tasklet
+  def memcache_set(self, key, value, **ctx_options):
+    assert isinstance(key, str)
+    options = _make_ctx_options(ctx_options)
+    value = yield self._memcache_set_batcher.add(('set', key, value), options)
+    raise tasklets.Return(value)
+
+  @tasklets.tasklet
+  def memcache_add(self, key, value, **ctx_options):
+    assert isinstance(key, str)
+    options = _make_ctx_options(ctx_options)
+    value = yield self._memcache_set_batcher.add(('add', key, value), options)
+    raise tasklets.Return(value)
+
+  @tasklets.tasklet
+  def memcache_replace(self, key, value, **ctx_options):
+    assert isinstance(key, str)
+    options = _make_ctx_options(ctx_options)
+    value = yield self._memcache_set_batcher.add(('replace', key, value),
+                                                 options)
+    raise tasklets.Return(value)
+
+  @tasklets.tasklet
+  def memcache_cas(self, key, value, **ctx_options):
+    assert isinstance(key, str)
+    options = _make_ctx_options(ctx_options)
+    value = yield self._memcache_set_batcher.add(('cas', key, value), options)
+    raise tasklets.Return(value)
+
+  @tasklets.tasklet
+  def memcache_delete(self, key, **ctx_options):
+    assert isinstance(key, str)
+    options = _make_ctx_options(ctx_options)
+    value = yield self._memcache_del_batcher.add(key, options)
+    raise tasklets.Return(value)
+
+  @tasklets.tasklet
+  def memcache_incr(self, key, delta=1, initial_value=None, **ctx_options):
+    assert isinstance(key, str)
+    options = _make_ctx_options(ctx_options)
+    value = yield self._memcache_off_batcher.add((key, delta, initial_value),
+                                                 options)
+    raise tasklets.Return(value)
+
+  @tasklets.tasklet
+  def memcache_decr(self, key, delta=1, initial_value=None, **ctx_options):
+    assert isinstance(key, str)
+    options = _make_ctx_options(ctx_options)
+    value = yield self._memcache_off_batcher.add((key, -delta, initial_value),
+                                                 options)
+    raise tasklets.Return(value)
 
 
 def toplevel(func):
