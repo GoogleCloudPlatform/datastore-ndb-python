@@ -1898,9 +1898,7 @@ class ModelTests(test_utils.DatastoreTest):
     ent = MyModel(key=key, name='yo')
     ent.put()
     key.get(use_cache=False)  # Write to memcache.
-    eventloop.run1()  # Wait for async memcache request to complete.
-    eventloop.run1()  # Yes, we need to process three events!
-    eventloop.run1()
+    eventloop.run()  # Wait for async memcache request to complete.
     # Verify that it is in both caches.
     self.assertTrue(ctx._cache[key] is ent)
     self.assertEqual(memcache.get(ctx._memcache_prefix + key.urlsafe()),
@@ -2004,8 +2002,7 @@ class ModelTests(test_utils.DatastoreTest):
       model.get_multi([x1, x3], use_cache=False, memcache_timeout=7)
       model.get_multi([x4], use_cache=False)
       model.get_multi([x2, x5], use_cache=False, memcache_timeout=5)
-      eventloop.run1()  # Wait for async memcache request to complete.
-      eventloop.run1()  # Yes, we need to process two events!
+      eventloop.run()  # Wait for async memcache request to complete.
       # (And there are straggler events too, but they don't matter here.)
     finally:
       ctx._memcache.add_multi_async = save_memcache_add_multi_async
