@@ -8,7 +8,7 @@ import time
 import unittest
 
 from google.appengine.api import datastore_errors
-from google.appengine.api import memcache
+from ndb import memcache
 from google.appengine.api import taskqueue
 from google.appengine.datastore import datastore_rpc
 
@@ -20,6 +20,11 @@ from ndb import tasklets
 from ndb import test_utils
 
 
+# Return values for memcache_{set,add,replace,cas}.
+STORED = True
+NOT_STORED = False
+
+
 class MyAutoBatcher(context.AutoBatcher):
 
   _log = []
@@ -29,9 +34,9 @@ class MyAutoBatcher(context.AutoBatcher):
     cls._log = []
 
   def __init__(self, todo_tasklet):
-    def wrap(*args):
-      self.__class__._log.append(args)
-      return todo_tasklet(*args)
+    def wrap(todo):
+      self.__class__._log.append((todo_tasklet.__name__, todo))
+      return todo_tasklet(todo)
     super(MyAutoBatcher, self).__init__(wrap)
 
 
@@ -66,7 +71,14 @@ class ContextTests(test_utils.DatastoreTest):
       raise tasklets.Return([ent1, ent2, ent3])
     ents = foo().get_result()
     self.assertEqual(ents, [None, None, None])
-    self.assertEqual(len(MyAutoBatcher._log), 1)
+    log = MyAutoBatcher._log
+    self.assertEqual(len(log), 2)
+    name, todo = log[0]
+    self.assertEqual(name, '_get_tasklet')
+    self.assertEqual(len(todo), 3)
+    name, todo = log[1]
+    self.assertEqual(name, '_memcache_get_tasklet')
+    self.assertEqual(len(todo), 3)
 
   @tasklets.tasklet
   def create_entities(self):
@@ -101,7 +113,13 @@ class ContextTests(test_utils.DatastoreTest):
       yield fut2
       yield fut3
     foo().check_success()
-    self.assertEqual(len(MyAutoBatcher._log), 1)
+    self.assertEqual(len(MyAutoBatcher._log), 2)
+    name, todo = MyAutoBatcher._log[0]
+    self.assertEqual(name, '_delete_tasklet')
+    self.assertEqual(len(todo), 3)
+    name, todo = MyAutoBatcher._log[1]
+    self.assertEqual(name, '_memcache_del_tasklet')
+    self.assertEqual(len(todo), 3)
 
   def testContext_MultiRpc(self):
     # This test really tests the proper handling of MultiRpc by
@@ -201,9 +219,9 @@ class ContextTests(test_utils.DatastoreTest):
 
   def testContext_MemcachePolicy(self):
     badkeys = []
-    def tracking_add_multi(*args, **kwds):
+    def tracking_add_async(*args, **kwds):
       try:
-        res = save_add_multi(*args, **kwds)
+        res = save_add_async(*args, **kwds)
         if badkeys and not res:
           res = badkeys
         track.append((args, kwds, res, None))
@@ -224,10 +242,10 @@ class ContextTests(test_utils.DatastoreTest):
     key2 = model.Key('Foo', 2)
     ent1 = model.Expando(key=key1, foo=42, bar='hello')
     ent2 = model.Expando(key=key2, foo=1, bar='world')
-    save_add_multi = memcache.add_multi
+    save_add_multi_async = self.ctx._memcache.add_multi_async
     try:
-      memcache.add_multi = tracking_add_multi
-      memcache.flush_all()
+      self.ctx._memcache.add_multi_async = tracking_add_multi_async
+      yield self.ctx._memcache.flush_all_async()
 
       track = []
       foo().check_success()
@@ -236,13 +254,13 @@ class ContextTests(test_utils.DatastoreTest):
                        ({key1.urlsafe(): ent1._to_pb(),
                          key2.urlsafe(): ent2._to_pb()},))
       self.assertEqual(track[0][1], {'key_prefix': 'NDB:', 'time': 0})
-      memcache.flush_all()
+      yield self.ctx._memcache.flush_all_async()
 
       track = []
       self.ctx.set_memcache_policy(lambda key: False)
       foo().check_success()
       self.assertEqual(len(track), 0)
-      memcache.flush_all()
+      yield self.ctx._memcache.flush_all_async()
 
       track = []
       self.ctx.set_memcache_policy(lambda key: key == key1)
@@ -251,7 +269,7 @@ class ContextTests(test_utils.DatastoreTest):
       self.assertEqual(track[0][0],
                        ({key1.urlsafe(): ent1._to_pb()},))
       self.assertEqual(track[0][1], {'key_prefix': 'NDB:', 'time': 0})
-      memcache.flush_all()
+      yield self.ctx._memcache.flush_all_async()
 
       track = []
       self.ctx.set_memcache_policy(lambda key: True)
@@ -264,7 +282,7 @@ class ContextTests(test_utils.DatastoreTest):
       self.assertEqual(track[1][0],
                        ({key2.urlsafe(): ent2._to_pb()},))
       self.assertEqual(track[1][1], {'key_prefix': 'NDB:', 'time': 2})
-      memcache.flush_all()
+      yield self.ctx._memcache.flush_all_async()
 
       track = []
       badkeys = [key2.urlsafe()]
@@ -272,9 +290,9 @@ class ContextTests(test_utils.DatastoreTest):
       foo().check_success()
       self.assertEqual(len(track), 1)
       self.assertEqual(track[0][2], badkeys)
-      memcache.flush_all()
+      yield self.ctx._memcache.flush_all_async()
     finally:
-      memcache.add_multi = save_add_multi
+      self.ctx._memcache.add_multi_async = save_add_multi_async
 
   def testContext_CacheQuery(self):
     @tasklets.tasklet
@@ -590,6 +608,68 @@ class ContextTests(test_utils.DatastoreTest):
     f2 = self.ctx.get(k2)
     e1 = f1.get_result()
     e2 = f2.get_result()
+
+  def testMemcacheAPI(self):
+    @tasklets.tasklet
+    def foo():
+      ctx = tasklets.get_context()
+      k1 = 'k1'
+      k2 = 'k2'
+      vv = yield ctx.memcache_get(k1), ctx.memcache_get(k2)
+      self.assertEqual(vv, [None, None])
+      v1 = '24'
+      v2 = 42
+      vv = yield ctx.memcache_set(k1, v1), ctx.memcache_set(k2, v2)
+      self.assertEqual(vv, [STORED, STORED])
+      vv = yield ctx.memcache_get(k1), ctx.memcache_get(k2)
+      self.assertEqual(vv, [v1, v2])
+      vv = yield ctx.memcache_incr(k1), ctx.memcache_decr(k2)
+      self.assertEqual(vv, [25, 41])
+      vv = yield ctx.memcache_get(k1), ctx.memcache_get(k2)
+      self.assertEqual(vv, ['25', 41])
+      vv = yield ctx.memcache_incr(k1, -1), ctx.memcache_decr(k2, -1)
+      self.assertEqual(vv, [24, 42])
+      vv = yield ctx.memcache_get(k1), ctx.memcache_get(k2)
+      self.assertEqual(vv, [v1, v2])
+      vv = yield ctx.memcache_add(k1, 'a'), ctx.memcache_add(k2, 'b')
+      self.assertEqual(vv, [NOT_STORED, NOT_STORED])
+      vv = yield ctx.memcache_replace(k1, 'a'), ctx.memcache_replace(k2, 'b')
+      self.assertEqual(vv, [STORED, STORED])
+      vv = yield ctx.memcache_delete(k1), ctx.memcache_delete(k2)
+      self.assertEqual(vv, [memcache.DELETE_SUCCESSFUL,
+                            memcache.DELETE_SUCCESSFUL])
+      vv = yield ctx.memcache_delete(k1), ctx.memcache_delete(k2)
+      self.assertEqual(vv, [memcache.DELETE_ITEM_MISSING,
+                            memcache.DELETE_ITEM_MISSING])
+      vv = yield ctx.memcache_incr(k1), ctx.memcache_decr(k2)
+      self.assertEqual(vv, [None, None])
+      vv = yield ctx.memcache_replace(k1, 'a'), ctx.memcache_replace(k2, 'b')
+      self.assertEqual(vv, [NOT_STORED, NOT_STORED])
+      vv = yield ctx.memcache_add(k1, 'a'), ctx.memcache_add(k2, 'b')
+      self.assertEqual(vv, [STORED, STORED])
+      vv = yield ctx.memcache_incr(k1), ctx.memcache_decr(k2)
+      self.assertEqual(vv, [None, None])
+
+    foo().get_result()
+
+  def testMemcacheCAS(self):
+    @tasklets.tasklet
+    def foo():
+      c1 = context.Context()
+      c2 = context.Context()
+      k1 = 'k1'
+      k2 = 'k2'
+      yield c1.memcache_set(k1, 'a'), c1.memcache_set(k2, 'b')
+      vv = yield c2.memcache_get(k1), c2.memcache_get(k2)
+      self.assertEqual(vv, ['a', 'b'])
+      vv = yield c1.memcache_gets(k1), c1.memcache_get(k2, for_cas=True)
+      self.assertEqual(vv, ['a', 'b'])
+      ffff = [c1.memcache_cas(k1, 'x'), c1.memcache_cas(k2, 'y'),
+              c2.memcache_cas(k1, 'p'), c2.memcache_cas(k2, 'q')]
+      vvvv = yield ffff
+      self.assertEqual(vvvv, [STORED, STORED, NOT_STORED, NOT_STORED])
+
+    foo().get_result()
 
 
 def main():
