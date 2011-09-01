@@ -485,30 +485,54 @@ def _ReferenceFromPairs(pairs, reference=None, app=None, namespace=None):
     if last:
       raise datastore_errors.BadArgumentError(
           'Incomplete Key entry must be last')
-    if not isinstance(kind, basestring):
-      if isinstance(kind, type):
+    t = type(kind)
+    if t is str:
+      pass
+    elif t is unicode:
+      kind = kind.encode('utf8')
+    else:
+      if issubclass(t, type):
         # Late import to avoid cycles.
         from .model import Model
         modelclass = kind
         assert issubclass(modelclass, Model), repr(modelclass)
         kind = modelclass._get_kind()
-      assert isinstance(kind, basestring), repr(kind)
-    if isinstance(kind, unicode):
-      kind = kind.encode('utf8')
+        t = type(kind)
+      if t is str:
+        pass
+      elif t is unicode:
+        kind = kind.encode('utf8')
+      elif issubclass(t, str):
+        pass
+      elif issubclass(t, unicode):
+        kind = kind.encode('utf8')
+      else:
+        assert False, repr(kind)
     assert 1 <= len(kind) <= 500
     elem = path.add_element()
     elem.set_type(kind)
-    if isinstance(idorname, (int, long)):
+    t = type(idorname)
+    if t is int or t is long:
       assert 1 <= idorname < 2**63
       elem.set_id(idorname)
-    elif isinstance(idorname, basestring):
-      if isinstance(idorname, unicode):
-        idorname = idorname.encode('utf8')
+    elif t is str:
+      assert 1 <= len(idorname) <= 500
+      elem.set_name(idorname)
+    elif t is unicode:
+      idorname = idorname.encode('utf8')
       assert 1 <= len(idorname) <= 500
       elem.set_name(idorname)
     elif idorname is None:
       elem.set_id(0)
       last = True
+    elif issubclass(t, (int, long)):
+      assert 1 <= idorname < 2**63
+      elem.set_id(idorname)
+    elif issubclass(t, basestring):
+      if issubclass(t, unicode):
+        idorname = idorname.encode('utf8')
+      assert 1 <= len(idorname) <= 500
+      elem.set_name(idorname)
     else:
       assert False, 'bad idorname (%r)' % (idorname,)
   # An empty app id means to use the default app id.
