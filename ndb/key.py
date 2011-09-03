@@ -219,6 +219,14 @@ class Key(object):
     elif parent is not None:
       pairs = list(pairs)
     assert pairs
+    for i, (kind, id) in enumerate(pairs):
+      assert id is None or isinstance(id, (int, long, basestring))
+      if isinstance(kind, type):
+        kind = kind._get_kind()
+        if isinstance(kind, unicode):
+          kind = kind.encode('utf8')
+        pairs[i] = (kind, id)
+      assert isinstance(kind, str)
     if parent is not None:
       if not isinstance(parent, Key):
         raise datastore_errors.BadValueError(
