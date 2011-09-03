@@ -216,21 +216,31 @@ class Key(object):
       assert not pairs
       assert len(flat) % 2 == 0
       pairs = [(flat[i], flat[i+1]) for i in xrange(0, len(flat), 2)]
-    elif parent is not None:
+    else:
       pairs = list(pairs)
     assert pairs
     for i, (kind, id) in enumerate(pairs):
-      assert id is None or isinstance(id, (int, long, basestring))
+      if isinstance(id, unicode):
+        id = id.encode('utf8')
+      elif id is None:
+        if i+1 < len(pairs):
+          raise datastore_errors.BadArgumentError(
+            'Incomplete Key entry must be last')
+      else:
+        assert isinstance(id, (int, long, str))
       if isinstance(kind, type):
         kind = kind._get_kind()
-        if isinstance(kind, unicode):
-          kind = kind.encode('utf8')
-        pairs[i] = (kind, id)
-      assert isinstance(kind, str)
+      if isinstance(kind, unicode):
+        kind = kind.encode('utf8')
+      assert isinstance(kind, str), repr(kind)
+      pairs[i] = (kind, id)
     if parent is not None:
       if not isinstance(parent, Key):
         raise datastore_errors.BadValueError(
             'Expected Key instance, got %r' % parent)
+      if not parent.id():
+        raise datastore_errors.BadArgumentError(
+          'Parent cannot have incomplete key')
       pairs[:0] = parent.pairs()
       if app:
         assert app == parent.app(), (app, parent.app())
