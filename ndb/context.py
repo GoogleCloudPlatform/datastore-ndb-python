@@ -843,6 +843,26 @@ class Context(object):
     raise tasklets.Return(ent)
 
   @tasklets.tasklet
+  def fetch_all(self, cls, keys_only=False, **ctx_options):
+    limit = cls._fetch_all_limit
+    if not limit:
+      # TODO: What exception to raise, really?
+      raise ValueError('You must set %s._fetch_all_limit to use fetch_all()' %
+                       cls.__name__)
+    assert isinstance(limit, (int, long))
+    memcache_key = cls._get_fetch_all_memcache_key(self)
+    keys = yield self.memcache_get(memcache_key)
+    if not keys:
+      # Fetch all keys and cache them.
+      keys = yield cls.query().fetch_async(limit=limit, keys_only=True)
+      yield self.memcache_add(memcache_key, keys)
+    if keys_only:
+      raise tasklets.Return(keys)
+    else:
+      entities = yield [key.get_async() for key in keys]
+      raise tasklets.Return(entities)
+
+  @tasklets.tasklet
   def _memcache_get_tasklet(self, todo):
     assert todo
     cas_keys = set()

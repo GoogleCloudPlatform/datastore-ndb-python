@@ -2177,31 +2177,18 @@ class Model(object):
       ctx.memcache_delete(cls._get_fetch_all_memcache_key(ctx),
                           seconds=context._LOCK_TIME)
 
-  # TODO: Make an async version of this.  (Problem: can't import tasklets
-  # at the top level.)
-  # TODO: Add a keys_only=<bool> flag.
   @classmethod
-  def _fetch_all(cls):
-    limit = cls._fetch_all_limit
-    if not limit:
-      # TODO: What exception to raise, really?
-      raise ValueError('You must set %s._fetch_all_limit to use fetch_all()' %
-                       cls.__name__)
-    from ndb import tasklets
-    ctx = tasklets.get_context()
-    memcache_key = cls._get_fetch_all_memcache_key(ctx)
-    keys = ctx.memcache_get(memcache_key).get_result()
-    if keys is None:
-      # Fetch all entities and cache their keys.
-      entities = cls.query().fetch(limit)
-      keys = [ent.key for ent in entities]
-      ctx.memcache_add(memcache_key, keys).get_result()
-    else:
-      # Fetch the entities given their keys, possibly from a cache.
-      futures = [key.get_async() for key in keys]
-      entities = filter(None, [fut.get_result() for fut in futures])
-    return entities
+  def _fetch_all(cls, keys_only=False, **ctx_options):
+    return cls._fetch_all_async(keys_only=keys_only,
+                                **ctx_options).get_result()
   fetch_all = _fetch_all
+
+  @classmethod
+  def _fetch_all_async(cls, keys_only=False, **ctx_options):
+    from ndb import tasklets
+    return tasklets.get_context().fetch_all(cls, keys_only=keys_only,
+                                            **ctx_options)
+  fetch_all_async = _fetch_all_async
 
 
 class Expando(Model):
