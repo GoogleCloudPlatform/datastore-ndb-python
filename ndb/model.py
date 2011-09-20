@@ -375,7 +375,14 @@ def make_connection(config=None, default_model=None):
       config=config)
 
 
-class Property(object):
+class ModelAttribute(object):
+  """A Base class signifying the presence of a _fix_up() method."""
+
+  def _fix_up(self, cls, code_name):
+    pass
+
+
+class Property(ModelAttribute):
   """A class describing a typed, persisted attribute of a datastore entity.
 
   Not to be confused with Python's 'property' built-in.
@@ -594,7 +601,7 @@ class Property(object):
           (value, self._name))
     return value
 
-  def _fix_up(self, code_name):
+  def _fix_up(self, cls, code_name):
     """Internal helper called to tell the property its name.
 
     This is called by _fix_up_properties() which is called by
@@ -1352,8 +1359,8 @@ class StructuredProperty(Property):
       assert not modelclass._has_repeated
     self._modelclass = modelclass
 
-  def _fix_up(self, code_name):
-    super(StructuredProperty, self)._fix_up(code_name)
+  def _fix_up(self, cls, code_name):
+    super(StructuredProperty, self)._fix_up(cls, code_name)
     self._fix_up_nested_properties()
 
   def _fix_up_nested_properties(self):
@@ -2012,15 +2019,14 @@ class Model(object):
       return
     for name in set(dir(cls)):
       prop = getattr(cls, name, None)
-      if isinstance(prop, ModelKey):
-        continue
-      if isinstance(prop, Property):
+      if isinstance(prop, ModelAttribute):
         assert not name.startswith('_')
-        # TODO: Tell prop the class, for error message.
-        prop._fix_up(name)
-        if prop._repeated:
-          cls._has_repeated = True
-        cls._properties[prop._name] = prop
+        prop._fix_up(cls, name)
+        if isinstance(prop, Property):
+          if prop._repeated:
+            cls._has_repeated = True
+          if not isinstance(prop, ModelKey):
+            cls._properties[prop._name] = prop
     cls._kind_map[cls._get_kind()] = cls
 
   # Datastore API using the default context.
