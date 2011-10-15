@@ -2,12 +2,20 @@
 
 REM Convenience to run tests on Windows.
 REM
-REM You must have installed the App Engine SDK toolkit, version 1.5.4 or later.
+REM You must have installed the App Engine SDK toolkit. For the required
+REM version see README.
 REM
-REM An optional second argument specifies the Python version as a two digit
-REM number (2.6.5 == 26), the default is 25 (as in 2.5.x).
+REM Provides similar functionality to Makefile, although with some additional
+REM limitations regarding argument sequences.  Please use the following order:
 REM
-REM Environment variables that override defaults:
+REM make target[_all] [python_version] [-v[v[v]]] [-q]
+REM
+REM python_version is an optional argument specifies the Python version as a
+REM two digit number (2.6.5 == 26), the default is 25 (as in 2.5.x).  *_all
+REM targets cannot be combined with the python_version target as all versions
+REM will be tested regardless of the version specified.
+REM
+REM Environment variables which override defaults:
 REM  - PYTHON: path to a specific python.exe to use
 REM  - PYTHON25, PYTHON26, PYTHON27: same as PYTHON but for individual versions
 REM  - PYTHONFLAGS: flags to pass python, defaults to -Wignore
@@ -24,12 +32,41 @@ SETLOCAL
 SET SUPPORTED_VERSIONS=(25 26 27)
 
 :processarguments
-IF NOT "%3"=="" (
-  ECHO Invalid argument %3
-  GOTO end
-)
+REM TODO: Use SPLIT style argument processing.
 SET MAKE=%0
-SET VERSION=%2
+SET ARG2=%2
+SET ARG3=%3
+SET ARG4=%4
+SET ARG5=%5
+IF "%ARG2:~0,1%"=="-" (
+  SET PYTHONFLAGS=%PYTHONFLAGS% %ARG2%
+) ELSE (
+  SET VERSION=%2
+)
+IF "%ARG3:~0,1%"=="-" (
+  SET FLAGS=%FLAGS% %ARG3%
+) ELSE (
+  IF NOT "%ARG3%"=="" (
+    ECHO Invalid argument %ARG3%
+    GOTO end
+  )
+)
+IF "%ARG4:~0,1%"=="-" (
+  SET FLAGS=%FLAGS% %ARG4%
+) ELSE (
+  IF NOT "%ARG4%"=="" (
+    ECHO Invalid argument %ARG4%
+    GOTO end
+  )
+)
+IF "%ARG5:~0,1%"=="-" (
+  SET FLAGS=%FLAGS% %ARG5%
+) ELSE (
+  IF NOT "%ARG5%"=="" (
+    ECHO Invalid argument %ARG5%
+    GOTO end
+  )
+)
 FOR /F "TOKENS=1,2,3 DELIMS=_" %%A IN ("%1") DO SET T1=%%A&SET T2=%%B&SET T3=%%C
 SET TARGET=%T1%
 IF NOT "%T3%"=="" (
