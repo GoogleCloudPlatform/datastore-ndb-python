@@ -607,6 +607,31 @@ class ModelTests(test_utils.NDBTest):
       r = q.fetch()
       self.assertEqual(r, [m2], str(q))
 
+  def testBottom(self):
+    a = model._Serializable(42)
+    b = model._Serializable(42)
+    c = model._Serializable('hello')
+    self.assertEqual("_Serializable(42)", repr(a))
+    self.assertEqual("_Serializable('hello')", repr(c))
+    self.assertTrue(a == b)
+    self.assertFalse(a != b)
+    self.assertTrue(b != c)
+    self.assertFalse(b == c)
+    self.assertFalse(a == 42)
+    self.assertTrue(a != 42)
+
+  def testCompressedValue(self):
+    a = model._CompressedValue('xyz')
+    b = model._CompressedValue('xyz')
+    c = model._CompressedValue('abc')
+    self.assertEqual("_CompressedValue('abc')", repr(c))
+    self.assertTrue(a == b)
+    self.assertFalse(a != b)
+    self.assertTrue(b != c)
+    self.assertFalse(b == c)
+    self.assertFalse(a == 'xyz')
+    self.assertTrue(a != 'xyz')
+
   def testProperty(self):
     class MyModel(model.Model):
       b = model.BooleanProperty()
@@ -1363,6 +1388,25 @@ class ModelTests(test_utils.NDBTest):
       repr(p),
       "Person(key=Key('Person', 42), "
       "address=Address(city='SF', street='345 Spear'), name='Google')")
+
+  def testModelReprNoSideEffects(self):
+    class Address(model.Model):
+      street = model.StringProperty()
+      city = model.StringProperty()
+    a = Address(street='345 Spear', city='SF')
+    # White box test: values are 'top values'.
+    self.assertEqual(a._values, {'street': '345 Spear', 'city': 'SF'})
+    a.put()
+    # White box test: put() has turned wrapped values in _Serializable().
+    self.assertEqual(a._values, {'street': model._Serializable('345 Spear'),
+                                 'city': model._Serializable('SF')})
+    self.assertEqual(repr(a),
+                     "Address(key=Key('Address', 1), "
+                     # (Note: Unicode literals.)
+                     "city=u'SF', street=u'345 Spear')")
+    # White box test: _values is unchanged.
+    self.assertEqual(a._values, {'street': model._Serializable('345 Spear'),
+                                 'city': model._Serializable('SF')})
 
   def testModelRepr_RenamedProperty(self):
     class Address(model.Model):
@@ -2558,11 +2602,15 @@ class ModelTests(test_utils.NDBTest):
         # dummy
         return value
 
-      def _serialize_value(self, value):
-        return value.__repr__()
+      def _to_serializable(self, value):
+        if not isinstance(value, str):
+          value = value.__repr__()
+        return value
 
-      def _deserialize_value(self, value):
-        return eval(value)
+      def _from_serializable(self, value):
+        if isinstance(value, str):
+          value = eval(value)
+        return value
 
     class M(model.Model):
       p1 = ReprProperty()

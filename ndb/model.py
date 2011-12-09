@@ -264,7 +264,8 @@ And finally these (without async variants):
 There are many other interesting features.  For example, Model
 subclasses may define pre-call and post-call hooks for most operations
 (get, put, delete, allocate_ids), and Property classes may be
-subclassed to suit various needs.
+subclassed to suit various needs.  Documentation for writing a
+Property subclass is in the docstring for the Property class.
 """
 
 __author__ = 'guido@google.com (Guido van Rossum)'
@@ -389,6 +390,38 @@ class ModelAttribute(object):
     pass
 
 
+class _Serializable(object):
+  """A marker object wrapping a 'serializable' value.
+
+  This is used to be able to tell whether ent._values[name] is a
+  user value (i.e. of a type that the Python code understands) or a
+  serializable value (i.e of a type that serialization understands).
+  User values are unwrapped; serializable values are wrapped in a
+  _Serializable instance.
+  """
+
+  __slots__ = ['ser_val']
+
+  def __init__(self, ser_val):
+    """Constructor.  Argument is the serializable value to be wrapped."""
+    assert ser_val is not None
+    assert not isinstance(ser_val, list), repr(ser_val)
+    self.ser_val = ser_val
+
+  def __repr__(self):
+    return '_Serializable(%r)' % (self.ser_val,)
+
+  def __eq__(self, other):
+    if not isinstance(other, _Serializable):
+      return NotImplemented
+    return self.ser_val == other.ser_val
+
+  def __ne__(self, other):
+    if not isinstance(other, _Serializable):
+      return NotImplemented
+    return self.ser_val != other.ser_val
+
+
 class Property(ModelAttribute):
   """A class describing a typed, persisted attribute of a datastore entity.
 
@@ -403,6 +436,99 @@ class Property(ModelAttribute):
   uses the non-underscore attribute namespace to refer to nested
   Property names; this is essential for specifying queries on
   subproperties (see the module docstring).
+
+  The Property class and its predefined subclasses allow easy
+  subclassing using composable (or stackable) validation and
+  conversion APIs.  These require some terminology definitions:
+
+  - A 'user value' is a value such as would be set and accessed by the
+    application code using standard attributes on the entity.
+
+  - A 'serializable value' is a value such as would be serialized to
+    and deserialized from the datastore.
+
+  The values stored in ent._values[name] and accessed by
+  _store_value() and _retrieve_value() can be either user values or
+  serializable values.  To retrieve user values, use
+  _get_user_value().  To retrieve serializable values, use
+  _get_serializable_value().  In particular, _get_value() calls
+  _get_user_value(), and _serialize() effectively calls
+  _get_serializable_value().
+
+  To store a user value, just call _store_value().  To store a
+  serializable value, wrap the value in a _Serializable() and then
+  call _store_value().
+
+  A Property subclass that wants to implement a specific
+  transformation between user values and serialiazble values should
+  implement two methods, _to_serializable() and _from_serializable().
+  These should *NOT* call their super() method; super calls are taken
+  care of by _call_to_serializable() and _call_from_serializable().
+  This is what is meant by composable (or stackable) APIs.
+
+  The API supports 'stacking' classes with ever more sophisticated
+  user<-->serializable conversions: the user-->serializable conversion
+  goes from more sophisticated to less sophisticated, while the
+  serializable-->user conversion goes from less sophisticated to more
+  sophisticated.  For example, see the relationship between
+  BlobProperty, TextProperty and StringProperty.
+
+  In addition to _to_serializable() and _from_serializable(), the
+  _validate() method is also a composable API.
+
+  The validation API distinguishes between 'lax' and 'strict' user
+  values.  The set of lax values is a superset of the set of strict
+  values.  The _validate() method takes a lax value and if necessary
+  converts it to a strict value.  This means that when setting the
+  property value, lax values are accepted, while when getting the
+  property value, only strict values will be returned.  If no
+  conversion is needed, _validate() may return None.  If the argument
+  is outside the set of accepted lax values, _validate() should raise
+  an exception, preferably TypeError or
+  datastore_errors.BadValueError.
+
+  Example/boilerplate:
+
+  def _validate(self, value):
+    'Lax user value to strict user value.'
+    if not isinstance(value, <top type>):
+      raise TypeError(...)  # Or datastore_errors.BadValueError(...).
+
+  def _to_serializable(sellf, value):
+    '(Strict) user value to serializable value.'
+    if isinstance(value, <user type>):
+      return <serializable type>(value)
+
+  def _from_serializable(self, value):
+    'Serializable value to (strict) user value.'
+    if not isinstance(value, <serializable type>):
+      return <user type>(value)
+
+  Things that _validate(), _to_serializable() and _from_serializable()
+  do *not* need to handle:
+
+  - None: They will not be called with None (and if they return None,
+    this means that the value does not need conversion).
+
+  - Repeated values: The infrastructure (_get_user_value() and
+    _get_serializable_value()) takes care of calling
+    _from_serializable() or _to_serializable() for each list item in a
+    repeated value.
+
+  - Wrapping values in _Serializable(): The wrapping and unwrapping is
+    taken care of by the infrastructure that calls the composable APIs.
+
+  - Comparisons: The comparison operations call _to_serializable() on
+    their operand.
+
+  - Distinguishing between user and serializable values: the
+    infrastructure guarantees that _from_serializable() will be called
+    with an (unwrapped) serializable value, and that
+    _to_serializable() will be called with a user value.
+
+  - Returning the original value: if any of these return None, the
+    original value is kept.  (Returning a differen value not equal to
+    None will substitute the different value.)
   """
 
   # TODO: Separate 'simple' properties from base Property class
@@ -439,6 +565,7 @@ class Property(ModelAttribute):
     if required is not None:
       self._required = required
     if default is not None:
+      # TODO: Call _validate() on default?
       self._default = default
     if verbose_name is not None:
       self._verbose_name = verbose_name
@@ -450,6 +577,7 @@ class Property(ModelAttribute):
       if not isinstance(choices, (list, tuple, set, frozenset)):
         raise TypeError('choices must be a list, tuple or set; received %r' %
                         choices)
+      # TODO: Call _validate() on each choice?
       self._choices = frozenset(choices)
     if validator is not None:
       # The validator is called as follows:
@@ -507,6 +635,7 @@ class Property(ModelAttribute):
     if value is not None:
       # TODO: Allow query.Binding instances?
       value = self._do_validate(value)
+      value = self._call_to_serializable(value)
       value = self._datastore_type(value)
     return FilterNode(self._name, op, value)
 
@@ -562,6 +691,7 @@ class Property(ModelAttribute):
     for val in value:
       if val is not None:
         val = self._do_validate(val)
+        val = self._call_to_serializable(val)
         val = self._datastore_type(val)
       values.append(val)
     return FilterNode(self._name, 'in', values)
@@ -588,37 +718,31 @@ class Property(ModelAttribute):
     """
     return datastore_query.PropertyOrder(self._name)
 
-  # TODO: Explain somewhere that None is never validated.
-  # TODO: What if a custom validator returns None?
-  # TODO: What if a custom validator wants to coerce a type that the
-  # built-in validator for a given class does not allow?
-
-  def _validate(self, value):
-    """Template method to validate and possibly modify the value.
-
-    This is intended to be overridden by Property subclasses.  It
-    should return the value either unchanged or modified in an
-    idempotent way, or raise an exception to indicate that the value
-    is invalid.  By convention the exception raised is BadValueError.
-
-    Note that for a repeated Property this function should be called
-    for each item in the list, not for the list as a whole.
-    """
-    return value
-
   def _do_validate(self, value):
     """Call all validations on the value.
 
-    This first calls self._validate(), then the custom validator
-    function, and finally checks the choices.  It returns the value,
-    possibly modified in an idempotent way, or raises an exception.
+    This calls the most derived _validate() method(s), then the custom
+    validator function, and then checks the choices.  It returns the
+    value, possibly modified in an idempotent way, or raises an
+    exception.
+
+    Note that this does not call all composable _validate() methods.
+    It only calls _validate() methods up to but not including the
+    first _to_serializable() method, when the MRO is traversed looking
+    for _validate() and _to_serializable() methods.  (IOW if a class
+    defines both _validate() and _to_serializable(), its _validate()
+    is called and then the search is aborted.)
 
     Note that for a repeated Property this function should be called
     for each item in the list, not for the list as a whole.
     """
-    value = self._validate(value)
+    if isinstance(value, _Serializable):
+      return value
+    value = self._call_shallow_validation(value)
     if self._validator is not None:
-      value = self._validator(self, value)
+      newvalue = self._validator(self, value)
+      if newvalue is not None:
+        value = newvalue
     if self._choices is not None:
       if value not in self._choices:
         raise datastore_errors.BadValueError(
@@ -658,7 +782,7 @@ class Property(ModelAttribute):
     should be a list.
     """
     if self._repeated:
-      if not isinstance(value, (list, tuple)):
+      if not isinstance(value, (list, tuple, set, frozenset)):
         raise datastore_errors.BadValueError('Expected list or tuple, got %r' %
                                              (value,))
       value = [self._do_validate(v) for v in value]
@@ -671,13 +795,203 @@ class Property(ModelAttribute):
     """Internal helper to ask if the entity has a value for this Property."""
     return self._name in entity._values
 
-  def _retrieve_value(self, entity):
+  def _retrieve_value(self, entity, default=None):
     """Internal helper to retrieve the value for this Property from an entity.
 
-    This returns None if no value is set.  For a repeated Property
-    this returns a list if a value is set, otherwise None.
+    This returns None if no value is set, or the default argument if
+    given.  For a repeated Property this returns a list if a value is
+    set, otherwise None.  No additional transformations are applied.
     """
-    return entity._values.get(self._name, self._default)
+    return entity._values.get(self._name, default)
+
+  def _get_user_value(self, entity):
+    """Return the user value for this property of the given entity.
+
+    This implies removing the _Serializable() wrapper if present, and
+    if it is, calling all _from_serializable() methods, in the reverse
+    method resolution order of the property's class.  It also handles
+    default values and repeated properties.
+    """
+    return self._apply_to_values(entity, self._opt_call_from_serializable)
+
+  def _get_serializable_value(self, entity):
+    """Return the serializable value for this property of the given entity.
+
+    This implies calling all _to_serializable() methods, in the method
+    resolution order of the property's class, and adding a
+    _Serializable() wrapper, if one is not already present.  (If one
+    is present, no work is done.)  It also handles default values and
+    repeated properties.
+    """
+    return self._apply_to_values(entity, self._opt_call_to_serializable)
+
+  # TODO: Invent a shorter name for this.
+  def _get_serializable_value_unwrapped_as_list(self, entity):
+    """Like _get_serializable_value(), but always returns a list.
+
+    Returns:
+      A new list of unwrapped serializable values.  For an unrepeated
+      property, if the value is missing or None, returns [None]; for a
+      repeated property, if the original value is missing or None or
+      empty, returns [].
+    """
+    wrapped = self._get_serializable_value(entity)
+    if self._repeated:
+      if wrapped is None:
+        return []
+      assert isinstance(wrapped, list)
+      return [w.ser_val for w in wrapped]
+    else:
+      if wrapped is None:
+        return [None]
+      assert isinstance(wrapped, _Serializable)
+      return [wrapped.ser_val]
+
+  def _opt_call_from_serializable(self, value):
+    """Call _from_serializable() if necessary.
+
+    If the value is a _Serializable instance, unwrap it and call all
+    _from_serializable() methods.  Otherwise, return the value
+    unchanged.
+    """
+    if isinstance(value, _Serializable):
+      value = self._call_from_serializable(value.ser_val)
+    return value
+
+  def _opt_call_to_serializable(self, value):
+    """Call _to_serializable() if necessary.
+
+    If the value is a _Serializable instance, return it unchanged.
+    Otherwise, call all _validate() and _to_serializable() methods and
+    wrap it in a _Serializable instance.
+    """
+    if not isinstance(value, _Serializable):
+      value = _Serializable(self._call_to_serializable(value))
+    return value
+
+  def _call_from_serializable(self, value):
+    """Call all _from_serializable() methods on the value.
+
+    This calls the methods in the reverse method resolution order of
+    the property's class.
+    """
+    methods = self._find_methods('_from_serializable', reverse=True)
+    call = self._apply_list(methods)
+    return call(value)
+
+  def _call_to_serializable(self, value):
+    """Call all _validate() and _to_serializable() methods on the value.
+
+    This calls the methods in the method resolution order of the
+    property's class.
+    """
+    methods = self._find_methods('_validate', '_to_serializable')
+    call = self._apply_list(methods)
+    return call(value)
+
+  def _call_shallow_validation(self, value):
+    """Call the initial set of _validate() methods.
+
+    This is similar to _call_to_serializable() except it only calls
+    those _validate() methods that can be called without needing to
+    call _to_serializable().
+
+    An example: suppose the class hierarchy is A -> B -> C ->
+    Property, and suppose A defines _validate() only, but B and C
+    define _validate() and _to_serializable().  The full list of
+    methods called by _call_to_serializable() is:
+
+      A._validate()
+      B._validate()
+      B._to_serializable()
+      C._validate()
+      C._to-serializable()
+
+    This method will call A._validate() and B._validate() but not the
+    others.
+    """
+    methods = []
+    for method in self._find_methods('_validate', '_to_serializable'):
+      if method.__name__ != '_validate':
+        break
+      methods.append(method)
+    call = self._apply_list(methods)
+    return call(value)
+
+  @classmethod
+  def _find_methods(cls, *names, **kwds):
+    """Compute a list of composable methods.
+
+    Because this is a common operation and the class hierarchy is
+    static, the outcome is cached (assuming that for a particular list
+    of names the reversed flag is either always on, or always off).
+
+    Args:
+      *names: One or more method names.
+      reverse: Optional flag, default False; if True, the list is
+        reversed.
+
+    Returns:
+      A list of callable class method objects.
+    """
+    reverse = kwds.pop('reverse', False)
+    assert not kwds, repr(kwds)
+    cache = cls.__dict__.get('_find_methods_cache')
+    if cache:
+      hit = cache.get(names)
+      if hit is not None:
+        return hit
+    else:
+      cls._find_methods_cache = cache = {}
+    methods = []
+    for c in cls.__mro__:
+      for name in names:
+        method = c.__dict__.get(name)
+        if method is not None:
+          methods.append(method)
+    if reverse:
+      methods.reverse()
+    cache[names] = methods
+    return methods
+
+  def _apply_list(self, methods):
+    """Return a single callable that applies a list of methods to a value.
+
+    If a method returns None, the last value is kept; if it returns
+    some other value, that replaces the last value.  Exceptions are
+    not caught.
+    """
+    def call(value):
+      for method in methods:
+        newvalue = method(self, value)
+        if newvalue is not None:
+          value = newvalue
+      return value
+    return call
+
+  def _apply_to_values(self, entity, function):
+    """Apply a function to the property value/values of a given entity.
+
+    This retrieves the property value, applies the function, and then
+    stores the value back.  For a repeated property, the function is
+    applied separately to each of the values in the list.  The
+    resulting value or list of values is both stored back in the
+    entity and returned from this method.
+    """
+    value = self._retrieve_value(entity, self._default)
+    if self._repeated:
+      if value is None:
+        value = []
+        self._store_value(entity, value)
+      else:
+        value[:] = map(function, value)
+    else:
+      if value is not None:
+        newvalue = function(value)
+        if newvalue is not None and newvalue is not value:
+          self._store_value(entity, newvalue)
+          value = newvalue
+    return value
 
   def _get_value(self, entity):
     """Internal helper to get the value for this Property from an entity.
@@ -685,11 +999,7 @@ class Property(ModelAttribute):
     For a repeated Property this initializes the value to an empty
     list if it is not set.
     """
-    value = self._retrieve_value(entity)
-    if value is None and self._repeated:
-      value = []
-      self._store_value(entity, value)
-    return value
+    return self._get_user_value(entity)
 
   def _delete_value(self, entity):
     """Internal helper to delete the value for this Property from an entity.
@@ -736,19 +1046,8 @@ class Property(ModelAttribute):
       parent_repeated: True if the parent (or an earlier ancestor)
         is a repeated Property.
     """
-    value = self._retrieve_value(entity)
-    if not self._repeated:
-      value = [value]
-    elif value is None:
-      value = []
-    elif not isinstance(value, list):
-      raise TypeError('value of %s must be a list; found %r' %
-                      (self._name, value))
-    for val in value:
-      if self._repeated:
-        # Re-validate repeated values, since the user could have
-        # appended values to the list, bypassing validation.
-        val = self._do_validate(val)
+    values = self._get_serializable_value_unwrapped_as_list(entity)
+    for val in values:
       if self._indexed:
         p = pb.add_property()
       else:
@@ -772,11 +1071,12 @@ class Property(ModelAttribute):
     """
     v = p.value()
     val = self._db_get_value(v, p)
+    if val is not None:
+      val = _Serializable(val)
     if self._repeated:
       if self._has_value(entity):
         value = self._retrieve_value(entity)
-        if not isinstance(value, list):
-          value = [value]
+        assert isinstance(value, list), repr(value)
         value.append(val)
       else:
         value = [val]
@@ -914,177 +1214,36 @@ class FloatProperty(Property):
     return v.doublevalue()
 
 
-class StringProperty(Property):
-  """A Property whose value is a text string."""
-  # TODO: Enforce size limit when indexed.
-
-  def _validate(self, value):
-    if not isinstance(value, basestring):
-      raise datastore_errors.BadValueError('Expected string, got %r' %
-                                           (value,))
-    # TODO: Always convert to Unicode?  But what if it's unconvertible?
-    return value
-
-  def _db_set_value(self, v, p, value):
-    if not isinstance(value, basestring):
-      raise TypeError('StringProperty %s can only be set to string values; '
-                      'received %r' % (self._name, value))
-    if isinstance(value, unicode):
-      value = value.encode('utf-8')
-    v.set_stringvalue(value)
-    if not self._indexed:
-      p.set_meaning(entity_pb.Property.TEXT)
-
-  def _db_get_value(self, v, unused_p):
-    if not v.has_stringvalue():
-      return None
-    raw = v.stringvalue()
-    try:
-      value = raw.decode('utf-8')
-      return value
-    except UnicodeDecodeError:
-      return raw
-
-
 # A custom 'meaning' for compressed properties.
 _MEANING_URI_COMPRESSED = 'ZLIB'
 
 
-class _CompressedValue(str):
-  """Used as a flag for compressed values."""
+class _CompressedValue(object):
+  """A marker object wrapping compressed values."""
+
+  __slots__ = ['z_val']
+
+  def __init__(self, z_val):
+    """Constructor.  Argument is a string returned by zlib.compress()."""
+    assert isinstance(z_val, str), repr(z_val)
+    self.z_val = z_val
 
   def __repr__(self):
-    return '_CompressedValue(%s)' % super(_CompressedValue, self).__repr__()
+    return '_CompressedValue(%s)' % repr(self.z_val)
+
+  def __eq__(self, other):
+    if not isinstance(other, _CompressedValue):
+      return NotImplemented
+    return self.z_val == other.z_val
+
+  def __ne__(self, other):
+    if not isinstance(other, _CompressedValue):
+      return NotImplemented
+    return self.z_val != other.z_val
 
 
-class CompressedPropertyMixin(Property):
-  """A mixin to store the property value compressed using zlib."""
-
-  def _db_set_value(self, v, p, value):
-    """Sets the property value in the protocol buffer.
-
-    The value stored in entity._values[self._name] can be either:
-
-    - A _CompressedValue instance to indicate that the value is compressed.
-      This is used to lazily decompress and deserialize the property when
-      it is first accessed.
-    - The uncompressed and deserialized value, when it is set, when it was
-      not stored compressed or after it is lazily decompressed and
-      deserialized on first access.
-
-    Subclasses must override this if they need to set a different meaning
-    in the protocol buffer (the defaults are BYTESTRING or BLOB), and then
-    call _db_set_compressed_value() which will compress the value if needed.
-    """
-    if self._indexed:
-      p.set_meaning(entity_pb.Property.BYTESTRING)
-    else:
-      p.set_meaning(entity_pb.Property.BLOB)
-    self._db_set_compressed_value(v, p, value)
-
-  def _db_set_compressed_value(self, v, p, value):
-    """Sets the property value in the protocol buffer, compressed if needed."""
-    if self._compressed:
-      # Use meaning_uri because setting meaning to something else that is not
-      # BLOB or BYTESTRING will cause the value to be decoded from utf-8 in
-      # datastore_types.FromPropertyPb. That would break the compressed string.
-      p.set_meaning_uri(_MEANING_URI_COMPRESSED)
-      if not isinstance(value, _CompressedValue):
-        value = zlib.compress(self._serialize_value(value))
-    else:
-      value = self._serialize_value(value)
-    if not isinstance(value, str):
-      raise RuntimeError('Compressed value of %s is not a string %r' %
-                         (self._name, value))
-    v.set_stringvalue(value)
-
-  def _db_get_value(self, v, p):
-    if not v.has_stringvalue():
-      return None
-    if p.meaning_uri() == _MEANING_URI_COMPRESSED:
-      # Return the value wrapped to flag it as compressed.
-      return _CompressedValue(v.stringvalue())
-    return self._deserialize_value(v.stringvalue())
-
-  def _get_value(self, entity):
-    value = super(CompressedPropertyMixin, self)._get_value(entity)
-    if self._repeated:
-      if value and isinstance(value[0], _CompressedValue):
-        # Decompress and deserialize each list item on first access.
-        for i in xrange(len(value)):
-          value[i] = self._deserialize_value(zlib.decompress(value[i]))
-    elif isinstance(value, _CompressedValue):
-      # Decompress and deserialize a single item on first access.
-      value = self._deserialize_value(zlib.decompress(value))
-      self._store_value(entity, value)
-    return value
-
-  def _serialize_value(self, value):
-    """Serializes the value, if needed.
-
-    Subclasses may override this to implement different serialization
-    mechanisms.
-    """
-    return value
-
-  def _deserialize_value(self, value):
-    """Deserializes the value, if needed.
-
-    Subclasses may override this to implement different deserialization
-    mechanisms.
-    """
-    return value
-
-
-class TextProperty(CompressedPropertyMixin, StringProperty):
-  """An unindexed Property whose value is a text string of unlimited length."""
-  # TODO: Maybe just use StringProperty(indexed=False)?
-
-  _indexed = False
-  _compressed = False
-
-  _attributes = StringProperty._attributes + ['_compressed']
-
-  @datastore_rpc._positional(1 + StringProperty._positional)
-  def __init__(self, compressed=False, **kwds):
-    super(TextProperty, self).__init__(**kwds)
-    if self._indexed:
-      raise NotImplementedError('TextProperty %s cannot be indexed.' %
-                                self._name)
-    self._compressed = compressed
-
-  def _validate(self, value):
-    if self._compressed and isinstance(value, _CompressedValue):
-      # A compressed value came from datastore and wasn't accessed, so it
-      # doesn't require validation.
-      return value
-    return super(TextProperty, self)._validate(value)
-
-  def _db_set_value(self, v, p, value):
-    if self._compressed:
-      p.set_meaning(entity_pb.Property.BLOB)
-    else:
-      p.set_meaning(entity_pb.Property.TEXT)
-    self._db_set_compressed_value(v, p, value)
-
-  def _serialize_value(self, value):
-    if not isinstance(value, basestring):
-      raise TypeError('TextProperty %s can only be serialized to string values;'
-                      ' received %r' % (self._name, value))
-    if isinstance(value, unicode):
-      return value.encode('utf-8')
-    return value
-
-  def _deserialize_value(self, value):
-    try:
-      return value.decode('utf-8')
-    except UnicodeDecodeError:
-      return value
-
-
-class BlobProperty(CompressedPropertyMixin, Property):
-  """A Property whose value is a byte string."""
-  # TODO: Enforce size limit when indexed.
+class BlobProperty(Property):
+  """A Property whose value is a byte string.  It may be compressed."""
 
   _indexed = False
   _compressed = False
@@ -1096,24 +1255,88 @@ class BlobProperty(CompressedPropertyMixin, Property):
     super(BlobProperty, self).__init__(name=name, **kwds)
     self._compressed = compressed
     if compressed and self._indexed:
+      # TODO: Allow this, but only allow == and IN comparisons?
       raise NotImplementedError('BlobProperty %s cannot be compressed and '
                                 'indexed at the same time.' % self._name)
 
   def _validate(self, value):
-    if self._compressed and isinstance(value, _CompressedValue):
-      return value
+    # TODO: Enforce size limit when indexed.
     if not isinstance(value, str):
-      raise datastore_errors.BadValueError('Expected 8-bit string, got %r' %
+      raise datastore_errors.BadValueError('Expected str, got %r' %
                                            (value,))
-    return value
+
+  def _to_serializable(self, value):
+    if self._compressed:
+      return _CompressedValue(zlib.compress(value))
+
+  def _from_serializable(self, value):
+    if isinstance(value, _CompressedValue):
+      return zlib.decompress(value.z_val)
 
   def _datastore_type(self, value):
     # Since this is only used for queries, and queries imply an
-    # indexed property, check that, and always use ByteString.
-    if not self._indexed:
-      raise RuntimeError('datastore_type should not be queried on non-indexed '
-                         'BlobProperty %s' % self._name)
+    # indexed property, always use ByteString.
     return datastore_types.ByteString(value)
+
+  def _db_set_value(self, v, p, value):
+    if isinstance(value, _CompressedValue):
+      self._db_set_compressed_meaning(p)
+      value = value.z_val
+    else:
+      self._db_set_uncompressed_meaning(p)
+    v.set_stringvalue(value)
+
+  def _db_set_compressed_meaning(self, p):
+    # Use meaning_uri because setting meaning to something else that is not
+    # BLOB or BYTESTRING will cause the value to be decoded from utf-8 in
+    # datastore_types.FromPropertyPb. That would break the compressed string.
+    p.set_meaning_uri(_MEANING_URI_COMPRESSED)
+    p.set_meaning(entity_pb.Property.BLOB)
+
+  def _db_set_uncompressed_meaning(self, p):
+    if self._indexed:
+      p.set_meaning(entity_pb.Property.BYTESTRING)
+    else:
+      p.set_meaning(entity_pb.Property.BLOB)
+
+  def _db_get_value(self, v, p):
+    if not v.has_stringvalue():
+      return None
+    value = v.stringvalue()
+    if p.meaning_uri() == _MEANING_URI_COMPRESSED:
+      value = _CompressedValue(value)
+    return value
+
+
+class TextProperty(BlobProperty):
+  """An unindexed Property whose value is a text string of unlimited length."""
+
+  def _validate(self, value):
+    # TODO: Enforce size limit when indexed.
+    if not isinstance(value, basestring):
+      raise datastore_errors.BadValueError('Expected string, got %r' %
+                                           (value,))
+
+  def _to_serializable(self, value):
+    if isinstance(value, unicode):
+      return value.encode('utf-8')
+
+  def _from_serializable(self, value):
+    if isinstance(value, str):
+      try:
+        return value.decode('utf-8')
+      except UnicodeDecodeError:
+        pass
+
+  def _db_set_uncompressed_meaning(self, p):
+    if not self._indexed:
+      p.set_meaning(entity_pb.Property.TEXT)
+
+
+class StringProperty(TextProperty):
+  """An indexed Property whose value is a text string of limited length."""
+
+  _indexed = True
 
 
 class GeoPtProperty(Property):
@@ -1123,7 +1346,6 @@ class GeoPtProperty(Property):
     if not isinstance(value, GeoPt):
       raise datastore_errors.BadValueError('Expected GeoPt, got %r' %
                                            (value,))
-    return value
 
   def _db_set_value(self, v, unused_p, value):
     if not isinstance(value, GeoPt):
@@ -1173,7 +1395,6 @@ class UserProperty(Property):
     if not isinstance(value, users.User):
       raise datastore_errors.BadValueError('Expected User, got %r' %
                                            (value,))
-    return value
 
   def _db_set_value(self, v, p, value):
     datastore_types.PackUser(p.name(), value, v)
@@ -1198,7 +1419,6 @@ class KeyProperty(Property):
     if not value.id():
       raise datastore_errors.BadValueError('Expected complete Key, got %r' %
                                            (value,))
-    return value
 
   def _db_set_value(self, v, unused_p, value):
     if not isinstance(value, Key):
@@ -1235,7 +1455,6 @@ class BlobKeyProperty(Property):
     if not isinstance(value, datastore_types.BlobKey):
       raise datastore_errors.BadValueError('Expected BlobKey, got %r' %
                                            (value,))
-    return value
 
   def _db_set_value(self, v, p, value):
     if not isinstance(value, datastore_types.BlobKey):
@@ -1274,6 +1493,7 @@ class DateTimeProperty(Property):
   @datastore_rpc._positional(1 + Property._positional)
   def __init__(self, name=None, auto_now=False, auto_now_add=False, **kwds):
     super(DateTimeProperty, self).__init__(name=name, **kwds)
+    # TODO: Disallow combining auto_now* and default?
     if self._repeated:
       if auto_now:
         raise ValueError('DateTimeProperty %s could use auto_now and be '
@@ -1288,14 +1508,13 @@ class DateTimeProperty(Property):
     if not isinstance(value, datetime.datetime):
       raise datastore_errors.BadValueError('Expected datetime, got %r' %
                                            (value,))
-    return value
 
   def _now(self):
     return datetime.datetime.now()
 
   def _prepare_for_put(self, entity):
     if (self._auto_now or
-        (self._auto_now_add and self._retrieve_value(entity) is None)):
+        (self._auto_now_add and not self._has_value(entity))):
       value = self._now()
       self._store_value(entity, value)
 
@@ -1354,54 +1573,41 @@ def _time_to_datetime(value):
 class DateProperty(DateTimeProperty):
   """A Property whose value is a date object."""
 
-  def _datastore_type(self, value):
-    return _date_to_datetime(value)
-
   def _validate(self, value):
-    if (not isinstance(value, datetime.date) or
-        isinstance(value, datetime.datetime)):
+    if not isinstance(value, datetime.date):
       raise datastore_errors.BadValueError('Expected date, got %r' %
                                            (value,))
-    return value
+
+  def _to_serializable(self, value):
+    assert isinstance(value, datetime.date), repr(value)
+    return _date_to_datetime(value)
+
+  def _from_serializable(self, value):
+    assert isinstance(value, datetime.datetime), repr(value)
+    return value.date()
 
   def _now(self):
     return datetime.date.today()
-
-  def _db_set_value(self, v, p, value):
-    value = _date_to_datetime(value)
-    super(DateProperty, self)._db_set_value(v, p, value)
-
-  def _db_get_value(self, v, p):
-    value = super(DateProperty, self)._db_get_value(v, p)
-    if value is not None:
-      value = value.date()
-    return value
 
 
 class TimeProperty(DateTimeProperty):
   """A Property whose value is a time object."""
 
-  def _datastore_type(self, value):
-    return _time_to_datetime(value)
-
   def _validate(self, value):
     if not isinstance(value, datetime.time):
       raise datastore_errors.BadValueError('Expected time, got %r' %
                                            (value,))
-    return value
+
+  def _to_serializable(self, value):
+    assert isinstance(value, datetime.time), repr(value)
+    return _time_to_datetime(value)
+
+  def _from_serializable(self, value):
+    assert isinstance(value, datetime.datetime), repr(value)
+    return value.time()
 
   def _now(self):
     return datetime.datetime.now().time()
-
-  def _db_set_value(self, v, p, value):
-    value = _time_to_datetime(value)
-    super(TimeProperty, self)._db_set_value(v, p, value)
-
-  def _db_get_value(self, v, p):
-    value = super(TimeProperty, self)._db_get_value(v, p)
-    if value is not None:
-      value = value.time()
-    return value
 
 
 class StructuredGetForDictMixin(Property):
@@ -1470,11 +1676,19 @@ class StructuredProperty(StructuredGetForDictMixin):
     from .query import ConjunctionNode, PostFilterNode
     from .query import RepeatedStructuredPropertyPredicate
     value = self._do_validate(value)  # None is not allowed!
+    value = self._call_to_serializable(value)
     filters = []
     match_keys = []
     # TODO: Why not just iterate over value._values?
     for prop in self._modelclass._properties.itervalues():
-      val = prop._retrieve_value(value)
+      vals = prop._get_serializable_value_unwrapped_as_list(value)
+      if prop._repeated:
+        if vals:
+          raise datastore_errors.BadFilterError(
+            'Cannot query for non-empty repeated property %s' % prop._name)
+        continue
+      assert isinstance(vals, list) and len(vals) == 1, repr(vals)
+      val = vals[0]
       if val is not None:
         altprop = getattr(self, prop._code_name)
         filt = altprop._comparison(op, val)
@@ -1512,7 +1726,6 @@ class StructuredProperty(StructuredGetForDictMixin):
     if not isinstance(value, self._modelclass):
       raise datastore_errors.BadValueError('Expected %s instance, got %r' %
                                            (self._modelclass.__name__, value))
-    return value
 
   def _has_value(self, entity, rest=None):
     # rest: optional list of attribute names to check in addition.
@@ -1538,36 +1751,25 @@ class StructuredProperty(StructuredGetForDictMixin):
 
   def _serialize(self, entity, pb, prefix='', parent_repeated=False):
     # entity -> pb; pb is an EntityProto message
-    value = self._retrieve_value(entity)
-    if value is None:
-      # TODO: Is this the right thing for queries?
-      # Skip structured values that are None.
-      return
-    cls = self._modelclass
-    if self._repeated:
-      if not isinstance(value, list):
-        raise RuntimeError('Cannot serialize repeated StructuredProperty %s; '
-                           'value retrieved not list %s' % (self._name, value))
-      values = value
-    else:
-      if not isinstance(value, cls):
-        raise RuntimeError('Cannot serialize StructuredProperty %s; value '
-                           'retrieved not a %s instance %r' %
-                           (self._name, cls.__name__, value))
-      values = [value]
+    values = self._get_serializable_value_unwrapped_as_list(entity)
     for value in values:
-      # TODO: Avoid re-sorting for repeated values.
-      for unused_name, prop in sorted(value._properties.iteritems()):
-        prop._serialize(value, pb, prefix + self._name + '.',
-                        self._repeated or parent_repeated)
+      if value is not None:
+        # TODO: Avoid re-sorting for repeated values.
+        for unused_name, prop in sorted(value._properties.iteritems()):
+          prop._serialize(value, pb, prefix + self._name + '.',
+                          self._repeated or parent_repeated)
 
   def _deserialize(self, entity, p, depth=1):
     if not self._repeated:
       subentity = self._retrieve_value(entity)
       if subentity is None:
         subentity = self._modelclass()
-        self._store_value(entity, subentity)
+        self._store_value(entity, _Serializable(subentity))
       cls = self._modelclass
+      if isinstance(subentity, _Serializable):
+        # NOTE: It may not be a _Serializable when we're deserializing a
+        # repeated structured property.
+        subentity = subentity.ser_val
       if not isinstance(subentity, cls):
         raise RuntimeError('Cannot deserialize StructuredProperty %s; value '
                            'retrieved not a %s instance %r' %
@@ -1591,12 +1793,7 @@ class StructuredProperty(StructuredGetForDictMixin):
       raise RuntimeError('Unable to find property %s of StructuredProperty %s.'
                          % (next, self._name))
 
-    values = self._retrieve_value(entity)
-    if values is None:
-      values = []
-    elif not isinstance(values, list):
-      values = [values]
-    self._store_value(entity, values)
+    values = self._get_serializable_value_unwrapped_as_list(entity)
     # Find the first subentity that doesn't have a value for this
     # property yet.
     for sub in values:
@@ -1606,17 +1803,19 @@ class StructuredProperty(StructuredGetForDictMixin):
         subentity = sub
         break
     else:
+      # We didn't find one.  Add a new one to the underlying list of
+      # values (the list returned by
+      # _get_serializable_value_unwrapped_as_list() is a copy so we
+      # can't append to it).
       subentity = self._modelclass()
-      values.append(subentity)
+      values = self._retrieve_value(entity)
+      values.append(_Serializable(subentity))
     prop._deserialize(subentity, p, depth + 1)
 
   def _prepare_for_put(self, entity):
-    value = self._get_value(entity)
-    if value:
-      if self._repeated:
-        for subent in value:
-          subent._prepare_for_put()
-      else:
+    values = self._get_serializable_value_unwrapped_as_list(entity)
+    for value in values:
+      if value is not None:
         value._prepare_for_put()
 
 
@@ -1648,25 +1847,28 @@ class LocalStructuredProperty(StructuredGetForDictMixin, BlobProperty):
     self._modelclass = modelclass
 
   def _validate(self, value):
-    if self._compressed and isinstance(value, _CompressedValue):
-      return value
     if not isinstance(value, self._modelclass):
       raise datastore_errors.BadValueError('Expected %s instance, got %r' %
                                            (self._modelclass.__name__, value))
-    return value
 
-  def _serialize_value(self, value):
-    pb = value._to_pb(set_key=False)
-    return pb.SerializePartialToString()
+  def _to_serializable(self, value):
+    if isinstance(value, self._modelclass):
+      pb = value._to_pb(set_key=False)
+      return pb.SerializePartialToString()
 
-  def _deserialize_value(self, value):
-    pb = entity_pb.EntityProto()
-    pb.MergePartialFromString(value)
-    return self._modelclass._from_pb(pb, set_key=False)
+  def _from_serializable(self, value):
+    if not isinstance(value, self._modelclass):
+      pb = entity_pb.EntityProto()
+      pb.MergePartialFromString(value)
+      return self._modelclass._from_pb(pb, set_key=False)
 
   def _prepare_for_put(self, entity):
-    value = self._get_value(entity)
-    if value:
+    # TODO: Using _get_user_value() here makes it impossible to
+    # subclass this class and add a _from_serializable().  But using
+    # _get_serializable_value() won't work, since that would return
+    # the serialized (and possibly compressed) serialized blob.
+    value = self._get_user_value(entity)
+    if value is not None:
       if self._repeated:
         for subent in value:
           subent._prepare_for_put()
@@ -1827,7 +2029,7 @@ class ComputedProperty(GenericProperty):
     return value
 
   def _prepare_for_put(self, entity):
-    self._get_value(entity)
+    self._get_value(entity)  # For its side effects.
 
 
 class MetaModel(type):
@@ -1984,11 +2186,17 @@ class Model(object):
   def __repr__(self):
     """Return an unambiguous string representation of an entity."""
     args = []
-    done = set()
     for prop in self._properties.itervalues():
       if prop._has_value(self):
-        args.append('%s=%r' % (prop._code_name, prop._get_value(self)))
-        done.add(prop._name)
+        val = prop._retrieve_value(self)
+        # Manually apply _from_serializable() so as not to have a side
+        # effect on what's contained in the entity.  Printing a value
+        # should not change it!
+        if prop._repeated:
+          val = [prop._opt_call_from_serializable(v) for v in val]
+        elif val is not None:
+          val = prop._opt_call_from_serializable(val)
+        args.append('%s=%r' % (prop._code_name, val))
     args.sort()
     if self._key is not None:
       args.insert(0, 'key=%r' % self._key)
@@ -2152,7 +2360,7 @@ class Model(object):
     self._clone_properties()
     if p.name() != next and not p.name().endswith('.' + next):
       prop = StructuredProperty(Expando, next)
-      self._values[prop._name] = Expando()
+      prop._store_value(self, _Serializable(Expando()))
     else:
       prop = GenericProperty(next,
                              repeated=p.multiple(),
