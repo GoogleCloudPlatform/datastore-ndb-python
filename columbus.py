@@ -58,5 +58,5 @@ columbus = HistoricPerson(
 columbus.put()
 
 # Query for historic people born no later than 1451.
-results = HistoricPerson.query(HistoricPerson.birth.last <= date(1451, 12, 31)).fetch()
-print results
+q = HistoricPerson.query(HistoricPerson.birth.last <= date(1451, 12, 31))
+print q.fetch()
