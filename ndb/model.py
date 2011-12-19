@@ -271,6 +271,7 @@ Property subclass is in the docstring for the Property class.
 __author__ = 'guido@google.com (Guido van Rossum)'
 
 import copy
+import cPickle as pickle
 import datetime
 import zlib
 
@@ -1378,6 +1379,16 @@ def _unpack_user(v):
                      _user_id=obfuscated_gaiaid,
                      federated_identity=federated_identity)
   return value
+
+
+class PickleProperty(BlobProperty):
+  """A Property whose value is any picklable Python ovject."""
+
+  def _to_base_type(self, value):
+    return pickle.dumps(value, 2)
+
+  def _from_base_type(self, value):
+    return pickle.loads(value)
 
 
 class UserProperty(Property):

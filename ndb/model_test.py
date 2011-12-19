@@ -926,6 +926,15 @@ class ModelTests(test_utils.NDBTest):
       # Reset environment.
       del os.environ['USER_EMAIL']
 
+  def testPickleProperty(self):
+    class MyModel(model.Model):
+      pkl = model.PickleProperty()
+    sample = {'one': 1, 2: [1, 2, '3'], 3.: model.Model}
+    ent = MyModel(pkl=sample)
+    ent.put()
+    ent2 = ent.key.get()
+    self.assertTrue(ent2.pkl == sample)
+
   def DateAndOrTimePropertyTest(self, propclass, t1, t2):
     class ClockInOut(model.Model):
       ctime = propclass(auto_now_add=True)
