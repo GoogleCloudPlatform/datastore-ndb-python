@@ -83,13 +83,13 @@ oldcoverage:
 	echo "open file://`pwd`/htmlcov/index.html"
 
 serve:
-	$(DEV_APPSERVER) . --port $(PORT) --address $(ADDRESS) $(FLAGS) --datastore_path=$(DATASTORE_PATH)
+	$(PYTHON) $(DEV_APPSERVER) . --port $(PORT) --address $(ADDRESS) $(FLAGS) --datastore_path=$(DATASTORE_PATH)
 
 debug:
-	$(DEV_APPSERVER) . --port $(PORT) --address $(ADDRESS) --debug $(FLAGS) --datastore_path=$(DATASTORE_PATH)
+	$(PYTHON) $(DEV_APPSERVER) . --port $(PORT) --address $(ADDRESS) --debug $(FLAGS) --datastore_path=$(DATASTORE_PATH)
 
 deploy:
-	$(APPCFG) update . $(FLAGS)
+	$(PYTHON) $(APPCFG) update . $(FLAGS)
 
 bench:
 	PYTHONPATH=$(GAEPATH):. $(PYTHON) bench.py $(FLAGS)
