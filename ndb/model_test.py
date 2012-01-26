@@ -410,6 +410,8 @@ class ModelTests(test_utils.NDBTest):
     self.assertTrue(model.Expando._properties == {})
     super(ModelTests, self).tearDown()
 
+  the_module = model
+
   def testKey(self):
     m = model.Model()
     self.assertEqual(m.key, None)

@@ -123,6 +123,7 @@ in a tasklet, properly yielding when appropriate:
 """
 
 from __future__ import with_statement
+del with_statement  # No need to export this.
 
 __author__ = 'guido@google.com (Guido van Rossum)'
 
@@ -139,8 +140,12 @@ from . import model
 from . import tasklets
 from . import utils
 
-__all__ = ['Binding', 'AND', 'OR', 'parse_gql', 'Query',
-           'QueryOptions', 'Cursor']
+__all__ = ['Query', 'QueryOptions', 'Cursor', 'QueryIterator',
+           'RepeatedStructuredPropertyPredicate',
+           'AND', 'OR', 'ConjunctionNode', 'DisjunctionNode',
+           'FilterNode', 'PostFilterNode', 'FalseNode', 'Node',
+           'Binding', 'parse_gql',
+           ]
 
 # Re-export some useful classes from the lower-level module.
 QueryOptions = datastore_query.QueryOptions
@@ -159,27 +164,8 @@ _OPS = frozenset(['=', '!=', '<', '<=', '>', '>=', 'in'])
 _MAX_LIMIT = 2 ** 31 - 1
 
 
-# TODO: Once CL/21689469 is submitted, get rid of this and its callers.
-def _make_unsorted_key_value_map(pb, property_names):
-  """Like _make_key_value_map() but doesn't sort the values."""
-  value_map = dict((name, []) for name in property_names)
-
-  # Building comparable values from pb properties.
-  # NOTE: Unindexed properties are skipped.
-  for prop in pb.property_list():
-    prop_name = prop.name()
-    if prop_name in value_map:
-      value_map[prop_name].append(
-        datastore_types.PropertyValueToKeyValue(prop.value()))
-
-  # Adding special key property (if requested).
-  if _KEY in value_map:
-    value_map[_KEY] = [datastore_types.ReferenceToKeyValue(pb.key())]
-
-  return value_map
-
-
 class RepeatedStructuredPropertyPredicate(datastore_query.FilterPredicate):
+  # Used by model.py.
 
   def __init__(self, match_keys, pb, key_prefix):
     super(RepeatedStructuredPropertyPredicate, self).__init__()
@@ -190,14 +176,11 @@ class RepeatedStructuredPropertyPredicate(datastore_query.FilterPredicate):
         raise ValueError('key %r does not begin with the specified prefix of %s'
                          % (key, key_prefix))
       stripped_keys.append(key[len(key_prefix):])
-    value_map = _make_unsorted_key_value_map(pb, stripped_keys)
+    value_map = datastore_query._make_key_value_map(pb, stripped_keys)
     self.match_values = tuple(value_map[key][0] for key in stripped_keys)
 
   def _get_prop_names(self):
     return frozenset(self.match_keys)
-
-  def __call__(self, pb):
-    return self._apply(_make_unsorted_key_value_map(pb, self.match_keys))
 
   def _apply(self, key_value_map):
     """Apply the filter to values extracted from an entity.
@@ -252,13 +235,6 @@ class RepeatedStructuredPropertyPredicate(datastore_query.FilterPredicate):
 
   # Don't implement _prune()!  It would mess up the row correspondence
   # within columns.
-
-
-class CompositePostFilter(datastore_query.CompositeFilter):
-
-  def __call__(self, pb):
-    key_value_map = _make_unsorted_key_value_map(pb, self._get_prop_names())
-    return self._apply(key_value_map)
 
 
 class Binding(object):
@@ -507,8 +483,6 @@ class ConjunctionNode(Node):
       return None
     if len(filters) == 1:
       return filters[0]
-    if post:
-      return CompositePostFilter(_AND, filters)
     return datastore_query.CompositeFilter(_AND, filters)
 
   def _post_filters(self):
@@ -714,6 +688,7 @@ class Query(object):
     if self.__filters is not None:
       args.append('filters=%r' % self.__filters)
     if self.__orders is not None:
+      # TODO: Format orders better.
       args.append('orders=...')  # PropertyOrder doesn't have a good repr().
     if self.__app is not None:
       args.append('app=%r' % self.__app)
@@ -1235,6 +1210,8 @@ class QueryIterator(object):
     # TODO: if cursor_after() was called for the previous item
     # reuse that result instead of computing it from scratch.
     # (Some cursor() calls make a datastore roundtrip.)
+    # TODO: reimplement the cursor() call to use NDB async I/O;
+    # perhaps even add async versions of cursor_before/after.
     return self._batch.cursor(self._index + self._exhausted)
 
   def cursor_after(self):

@@ -25,6 +25,8 @@ class QueryTests(test_utils.NDBTest):
       tags = model.StringProperty(repeated=True)
     self.create_entities()
 
+  the_module = query
+
   def create_entities(self):
     self.joe = Foo(name='joe', tags=['joe', 'jill', 'hello'], rate=1)
     self.joe.put()

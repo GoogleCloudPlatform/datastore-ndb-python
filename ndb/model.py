@@ -308,6 +308,7 @@ __all__ = ['Key', 'ModelAdapter', 'ModelAttribute',
            'get_multi', 'get_multi_async',
            'put_multi', 'put_multi_async',
            'delete_multi', 'delete_multi_async',
+           'make_connection',
            ]
 
 
@@ -1702,7 +1703,7 @@ class TimeProperty(DateTimeProperty):
     return datetime.datetime.now().time()
 
 
-class StructuredGetForDictMixin(Property):
+class _StructuredGetForDictMixin(Property):
   """Mixin class so *StructuredProperty can share _get_for_dict().
 
   The behavior here is that sub-entities are converted to dictionaries
@@ -1719,7 +1720,7 @@ class StructuredGetForDictMixin(Property):
     return value
 
 
-class StructuredProperty(StructuredGetForDictMixin):
+class StructuredProperty(_StructuredGetForDictMixin):
   """A Property whose value is itself an entity.
 
   The values of the sub-entity are indexed and can be queried.
@@ -1930,7 +1931,7 @@ class StructuredProperty(StructuredGetForDictMixin):
         value._prepare_for_put()
 
 
-class LocalStructuredProperty(StructuredGetForDictMixin, BlobProperty):
+class LocalStructuredProperty(_StructuredGetForDictMixin, BlobProperty):
   """Substructure that is serialized to an opaque blob.
 
   This looks like StructuredProperty on the Python side, but is
@@ -2229,6 +2230,8 @@ class Model(object):
     through the constructor, but can be assigned to entity attributes
     after the entity has been created.
     """
+    # TODO: Use the same signature hacks as in get_or_insert() to
+    # fully support properties named id, parent or key?
     if key is not None:
       if id is not None:
         raise datastore_errors.BadArgumentError(
@@ -2581,6 +2584,7 @@ class Model(object):
     Returns:
       A Query object.
     """
+    # TODO: Disallow non-empty args and filter=.
     from .query import Query  # Import late to avoid circular imports.
     qry = Query(kind=cls._get_kind(), **kwds)
     if args:
@@ -2680,7 +2684,7 @@ class Model(object):
         def txn():
           ent = yield key.get_async(options=context_options)
           if ent is None:
-            ent = cls(**kwds)  # TODO: Check for forbidden keys
+            ent = cls(**kwds)  # TODO: Use _populate().
             ent._key = key
             yield ent.put_async(options=context_options)
           raise tasklets.Return(ent)

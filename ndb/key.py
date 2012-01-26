@@ -555,6 +555,7 @@ class Key(object):
 
 
 # The remaining functions in this module are private.
+# TODO: Conform to PEP 8 naming, e.g. _construct_reference() etc.
 
 @utils.positional(1)
 def _ConstructReference(cls, pairs=None, flat=None,
