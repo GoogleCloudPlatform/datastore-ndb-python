@@ -76,8 +76,10 @@ class PendingTests(test_utils.NDBTest):
     self.conn.wait_for_all_pending_rpcs()
     self.assertEqual(self.conn.get_pending_rpcs(), set())
 
+
 def main():
   unittest.main()
+
 
 if __name__ == '__main__':
   main()

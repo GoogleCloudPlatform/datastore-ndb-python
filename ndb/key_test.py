@@ -431,5 +431,6 @@ class KeyTests(test_utils.NDBTest):
 def main():
   unittest.main()
 
+
 if __name__ == '__main__':
   main()

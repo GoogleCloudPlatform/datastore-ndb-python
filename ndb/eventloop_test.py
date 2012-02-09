@@ -151,8 +151,10 @@ class EventLoopTests(test_utils.NDBTest):
     ev = eventloop.get_event_loop()  # A new event loop.
     self.assertEqual(len(ev.rpcs), 0)
 
+
 def main():
   unittest.main()
+
 
 if __name__ == '__main__':
   main()

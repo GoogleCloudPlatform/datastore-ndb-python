@@ -3414,8 +3414,10 @@ class CacheTests(test_utils.NDBTest):
     self.assertEqual(copy.wrap[0].range, None)
     self.assertEqual(copy.wrap[1].range, IntRangeModel(first=0, last=10))
 
+
 def main():
   unittest.main()
+
 
 if __name__ == '__main__':
   main()
