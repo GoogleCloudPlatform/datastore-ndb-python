@@ -2246,7 +2246,6 @@ class ModelTests(test_utils.NDBTest):
     self.assertNotEqual(key.get(), None)
     self.assertEqual(key.get().text, 'baz')
 
-
   def testGetOrInsertAsync(self):
     class Mod(model.Model):
       data = model.StringProperty()
@@ -2269,6 +2268,51 @@ class ModelTests(test_utils.NDBTest):
       ent2 = yield Mod.get_or_insert_async('a', parent=parent, data='hello')
       self.assertEqual(ent2, ent)
     foo().check_success()
+
+  def testGetOrInsertAsyncInTransaction(self):
+    class Mod(model.Model):
+      data = model.StringProperty()
+
+    def txn():
+      ent = Mod.get_or_insert('a', data='hola')
+      self.assertTrue(isinstance(ent, Mod))
+      ent2 = Mod.get_or_insert('a', data='hola2')
+      self.assertEqual(ent2, ent)
+      self.assertTrue(ent2 is ent)
+      raise model.Rollback()
+
+    # First with caching turned off.  (This works because the
+    # transactional context always starts out with caching turned on.)
+    model.transaction(txn)
+    self.assertEqual(Mod.query().get(), None)
+
+    # And again with caching turned on.
+    ctx = tasklets.get_context()
+    ctx.set_cache_policy(None)  # Restore default cache policy.
+    model.transaction(txn)
+    self.assertEqual(Mod.query().get(), None)
+
+  def testGetOrInsertAsyncInTransactionUncacheableModel(self):
+    class Mod(model.Model):
+      _use_cache = False
+      data = model.StringProperty()
+
+    def txn():
+      ent = Mod.get_or_insert('a', data='hola')
+      self.assertTrue(isinstance(ent, Mod))
+      ent2 = Mod.get_or_insert('a', data='hola2')
+      self.assertEqual(ent2.data, 'hola2')
+      raise model.Rollback()
+
+    # First with caching turned off.
+    model.transaction(txn)
+    self.assertEqual(Mod.query().get(), None)
+
+    # And again with caching turned on.
+    ctx = tasklets.get_context()
+    ctx.set_cache_policy(None)  # Restore default cache policy.
+    model.transaction(txn)
+    self.assertEqual(Mod.query().get(), None)
 
   def testGetById(self):
     class MyModel(model.Model):
@@ -2365,6 +2409,24 @@ class ModelTests(test_utils.NDBTest):
     self.assertNotEqual(c, None)
     self.assertEqual(c.text, 'baz')
     self.assertEqual(key.get(), c)
+
+  def testNoNestedTransactions(self):
+    self.ExpectWarnings()
+
+    class MyModel(model.Model):
+      text = model.StringProperty()
+
+    key = model.Key(MyModel, 'schtroumpf')
+    self.assertEqual(key.get(), None)
+
+    def inner():
+      self.fail('Should not get here')
+
+    def outer():
+      model.transaction(inner)
+
+    self.assertRaises(datastore_errors.BadRequestError,
+                      model.transaction, outer)
 
   def testGetMultiAsync(self):
     model.Model._kind_map['Model'] = model.Model

@@ -2893,17 +2893,23 @@ class Model(_NotEqualMixin):
 
     @tasklets.tasklet
     def internal_tasklet():
-      ent = yield key.get_async(options=context_options)
-      if ent is None:
-        @tasklets.tasklet
-        def txn():
-          ent = yield key.get_async(options=context_options)
-          if ent is None:
-            ent = cls(**kwds)  # TODO: Use _populate().
-            ent._key = key
-            yield ent.put_async(options=context_options)
-          raise tasklets.Return(ent)
-        ent = yield transaction_async(txn)
+      @tasklets.tasklet
+      def txn():
+        ent = yield key.get_async(options=context_options)
+        if ent is None:
+          ent = cls(**kwds)  # TODO: Use _populate().
+          ent._key = key
+          yield ent.put_async(options=context_options)
+        raise tasklets.Return(ent)
+      if in_transaction():
+        # Run txn() in existing transaction.
+        ent = yield txn()
+      else:
+        # Maybe avoid a transaction altogether.
+        ent = yield key.get_async(options=context_options)
+        if ent is None:
+          # Run txn() in new transaction.
+          ent = yield transaction_async(txn)
       raise tasklets.Return(ent)
 
     return internal_tasklet()
@@ -3131,7 +3137,11 @@ def transaction_async(callback, **kwds):
   This is the asynchronous version of transaction().
   """
   from . import tasklets
-  return tasklets.get_context().transaction(callback, **kwds)
+  ctx = tasklets.get_context()
+  if ctx.in_transaction():
+    raise datastore_errors.BadRequestError(
+      'Nested transactions are not supported.')
+  return ctx.transaction(callback, **kwds)
 
 
 def in_transaction():
