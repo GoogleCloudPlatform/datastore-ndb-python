@@ -304,7 +304,7 @@ __all__ = ['Key', 'BlobKey', 'GeoPt', 'Rollback',
            'ModelAdapter', 'ModelAttribute',
            'ModelKey', 'MetaModel', 'Model', 'Expando',
            'transaction', 'transaction_async',
-           'in_transaction', 'transactional',
+           'in_transaction', 'transactional', 'non_transactional',
            'get_multi', 'get_multi_async',
            'put_multi', 'put_multi_async',
            'delete_multi', 'delete_multi_async',
@@ -3185,6 +3185,24 @@ def transaction(callback, **ctx_options):
     callback: A function or tasklet to be called.
     **ctx_options: Context options.
 
+  Useful options include:
+    retries=N: Retry up to N times (i.e. try up to N+1 times)
+    propagation=<flag>: Determines how an existing transaction should be
+      propagated, where <flag> can be one of the following:
+      ContextOptions.NESTED: Start a nested transaction (not yet implemented).
+      ContextOptions.MANDATORY: A transaction must already be in progress.
+      ContextOptions.ALLOWED: If a transaction is in progress, join it.
+      ContextOptions.INDEPENDENT: Always start a new parallel transaction.
+    xg=True: On the High Replication Datastore, enable cross-group
+      transactions, i.e. allow writing to up to 5 entity groups.
+
+  WARNING: Using anything other than NESTED for the propagation flag
+  can have strange consequences.  When using ALLOWED or MANDATORY, if
+  an exception is raised, the transaction is likely not safe to
+  commit.  When using INDEPENDENT it is not generally safe to return
+  values read to the caller (as they were not read in the caller's
+  transaction).
+
   Returns:
     Whatever callback() returns.
 
@@ -3203,17 +3221,13 @@ def transaction(callback, **ctx_options):
 
 
 @utils.positional(1)
-def transaction_async(callback, **kwds):
+def transaction_async(callback, **ctx_options):
   """Run a callback in a transaction.
 
   This is the asynchronous version of transaction().
   """
   from . import tasklets
-  ctx = tasklets.get_context()
-  if ctx.in_transaction():
-    raise datastore_errors.BadRequestError(
-      'Nested transactions are not supported.')
-  return ctx.transaction(callback, **kwds)
+  return tasklets.get_context().transaction(callback, **ctx_options)
 
 
 def in_transaction():
@@ -3223,10 +3237,12 @@ def in_transaction():
 
 
 @utils.positional(1)
-def transactional(func=None, **ctx_options):
+def transactional(_func=None, **ctx_options):
   """Decorator to make a function automatically run in a transaction.
 
-  If we're already in a transaction this is a no-op.
+  Args:
+    _func: Do not use.
+    **ctx_options: Context options.
 
   This supports two forms:
 
@@ -3240,22 +3256,74 @@ def transactional(func=None, **ctx_options):
       def callback(arg):
         ...
   """
-  if func is not None:
+  if _func is not None:
     # Form (1), vanilla.
     if ctx_options:
       raise TypeError('@transactional() does not take positional arguments')
-    return transactional()(func)
+    # TODO: Avoid recursion, call outer_transactional_wrapper() directly?
+    return transactional()(_func)
+
+  ctx_options.setdefault('propagation',
+                         datastore_rpc.TransactionOptions.ALLOWED)
 
   # Form (2), with options.
   def outer_transactional_wrapper(func):
     @utils.wrapping(func)
-    def transactional_wrapper(*args, **kwds):
-      if in_transaction():
-        return func(*args, **kwds)
-      else:
-        return transaction(lambda: func(*args, **kwds), **ctx_options)
-    return transactional_wrapper
+    def inner_transactional_wrapper(*args, **kwds):
+      f = func
+      if args or kwds:
+        f = lambda: func(*args, **kwds)
+      return transaction(f, **ctx_options)
+    return inner_transactional_wrapper
   return outer_transactional_wrapper
+
+
+@utils.positional(1)
+def non_transactional(_func=None, allow_existing=True):
+  """A decorator that ensures a function is run outside a transaction.
+
+  If there is an existing transaction (and allow_existing=True), the
+  existing transaction is paused while the function is executed.
+
+  Args:
+    _func: Do not use.
+    allow_existing: If false, throw an exception if called from within
+      a transaction.  If true, temporarily re-establish the
+      previous non-transactional context.  Defaults to True.
+
+  This supports two forms, similar to transactional().
+
+  Returns:
+    A wrapper for the decorated function that ensures it runs outside a
+    transaction.
+  """
+  if _func is not None:
+    # TODO: Avoid recursion, call outer_non_transactional_wrapper() directly?
+    return non_transactional()(_func)
+
+  def outer_non_transactional_wrapper(func):
+    from . import tasklets
+    @utils.wrapping(func)
+    def inner_non_transactional_wrapper(*args, **kwds):
+      ctx = tasklets.get_context()
+      if not ctx.in_transaction():
+        return func(*args, **kwds)
+      if not allow_existing:
+        raise datastore_errors.BadRequestError(
+          '%s cannot be called within a transaction.' % func.__name__)
+      save_ctx = ctx
+      while ctx.in_transaction():
+        ctx = ctx._parent_context
+        if ctx is None:
+          raise datastore_errors.BadRequestError(
+            'Context without non-transactional ancestor')
+      try:
+        tasklets.set_context(ctx)
+        return func(*args, **kwds)
+      finally:
+        tasklets.set_context(save_ctx)
+    return inner_non_transactional_wrapper
+  return outer_non_transactional_wrapper
 
 
 def get_multi_async(keys, **ctx_options):

@@ -15,6 +15,7 @@ from .google_imports import namespace_manager
 from .google_imports import users
 from .google_test_imports import datastore_stub_util
 
+from . import context
 from . import eventloop
 from . import key
 from . import model
@@ -2473,6 +2474,18 @@ class ModelTests(test_utils.NDBTest):
     model.transaction(txn)
     self.assertEqual(Mod.query().get(), None)
 
+  def testGetOrInsertAsyncInTransaction(self):
+    class Mod(model.Model):
+      data = model.StringProperty()
+    def txn():
+      ent = Mod.get_or_insert('a', data='hola')
+      self.assertTrue(isinstance(ent, Mod))
+      ent2 = Mod.get_or_insert('a', data='hola')
+      self.assertEqual(ent2, ent)
+      raise model.Rollback()
+    model.transaction(txn)
+    self.assertEqual(Mod.query().get(), None)
+
   def testGetById(self):
     class MyModel(model.Model):
       pass
@@ -3012,7 +3025,9 @@ class ModelTests(test_utils.NDBTest):
       ctx._conn.async_commit = wrap_async_commit
     log = []
     callback1(log)
-    self.assertEqual(log, [None])
+    self.assertEqual(
+      log,
+      [context.ContextOptions(propagation=context.ContextOptions.ALLOWED)])
 
     @model.transactional(retries=42)
     def callback2(log):
@@ -3027,6 +3042,228 @@ class ModelTests(test_utils.NDBTest):
     callback2(log)
     self.assertEqual(len(log), 1)
     self.assertEqual(log[0].retries, 42)
+
+    @model.transactional(retries=2)
+    def callback3():
+      self.assertTrue(model.in_transaction())
+      ctx = tasklets.get_context()
+      orig_async_commit = ctx._conn.async_commit
+      def wrap_async_commit(options):
+        log.append(options)
+        return orig_async_commit(options)
+      ctx._conn.async_commit = wrap_async_commit
+    log = []
+    callback3()
+    self.assertEqual(len(log), 1)
+    self.assertEqual(log[0].retries, 2)
+
+  def testTransactionalDecoratorPropagationOptions(self):
+    # Test @transactional(propagation=<flag>) for all supported <flag>
+    # values and in_transaction() states.
+    self.ExpectWarnings()
+    class Counter(model.Model):
+      count = model.IntegerProperty(default=0)
+    def increment(key, delta=1):
+      ctx = tasklets.get_context()
+      ent = key.get()
+      if ent is None:
+        ent = Counter(count=delta, key=key)
+      else:
+        ent.count += delta
+      ent.put()
+      return (ent.key, ctx)
+
+    # *** Not currently in a transaction. ***
+    octx = tasklets.get_context()
+    self.assertFalse(octx.in_transaction())
+    key = model.Key(Counter, 'a')
+    # Undecorated -- runs in current context
+    nkey, nctx = increment(key)
+    self.assertTrue(nctx is octx)
+    self.assertEqual(nkey, key)
+    self.assertEqual(key.get().count, 1)
+    # propagation=NESTED -- creates new transaction
+    flag = context.ContextOptions.NESTED
+    nkey, nctx = model.transactional(propagation=flag)(increment)(key)
+    self.assertTrue(nctx is not octx)
+    self.assertTrue(nctx.in_transaction())
+    self.assertEqual(nkey, key)
+    self.assertEqual(nkey.get().count, 2)
+    # propagation=MANDATORY -- error
+    flag = context.ContextOptions.MANDATORY
+    self.assertRaises(datastore_errors.BadRequestError,
+                      model.transactional(propagation=flag)(increment), key)
+    # propagation=ALLOWED -- creates new transaction
+    flag = context.ContextOptions.ALLOWED
+    nkey, nctx = model.transactional(propagation=flag)(increment)(key)
+    self.assertTrue(nctx is not octx)
+    self.assertTrue(nctx.in_transaction())
+    self.assertEqual(nkey, key)
+    self.assertEqual(nkey.get().count, 3)
+    # propagation=INDEPENDENT -- creates new transaction
+    flag = context.ContextOptions.INDEPENDENT
+    nkey, nctx = model.transactional(propagation=flag)(increment)(key)
+    self.assertTrue(nctx is not octx)
+    self.assertTrue(nctx.in_transaction())
+    self.assertEqual(nkey, key)
+    self.assertEqual(nkey.get().count, 4)
+    # propagation=None -- creates new transaction
+    flag = None
+    nkey, nctx = model.transactional(propagation=flag)(increment)(key)
+    self.assertTrue(nctx is not octx)
+    self.assertTrue(nctx.in_transaction())
+    self.assertEqual(nkey, key)
+    self.assertEqual(nkey.get().count, 5)
+    # propagation not set -- creates new transaction
+    nkey, nctx = model.transactional()(increment)(key)
+    self.assertTrue(nctx is not octx)
+    self.assertTrue(nctx.in_transaction())
+    self.assertEqual(nkey, key)
+    self.assertEqual(nkey.get().count, 6)
+
+    # *** Currently in a transaction. ***
+    def callback():
+      octx = tasklets.get_context()
+      self.assertTrue(octx.in_transaction())
+      key = model.Key(Counter, 'b')
+      # Undecorated -- runs in current context
+      nkey, nctx = increment(key)
+      self.assertTrue(nctx is octx)
+      self.assertEqual(nkey, key)
+      self.assertEqual(key.get().count, 1)
+      # propagation=NESTED -- error
+      flag = context.ContextOptions.NESTED
+      self.assertRaises(datastore_errors.BadRequestError,
+                        model.transactional(propagation=flag)(increment), key)
+      # propagation=MANDATORY -- runs in current context
+      flag = context.ContextOptions.MANDATORY
+      nkey, nctx = model.transactional(propagation=flag)(increment)(key)
+      self.assertTrue(nctx is octx)
+      self.assertEqual(nkey, key)
+      self.assertEqual(nkey.get().count, 2)
+      # propagation=ALLOWED -- runs in current context
+      flag = context.ContextOptions.ALLOWED
+      nkey, nctx = model.transactional(propagation=flag)(increment)(key)
+      self.assertTrue(nctx is octx)
+      self.assertEqual(nkey, key)
+      self.assertEqual(nkey.get().count, 3)
+      # propagation=INDEPENDENT -- creates new transaction
+      flag = context.ContextOptions.INDEPENDENT
+      nkey, nctx = model.transactional(propagation=flag)(increment)(key)
+      self.assertTrue(nctx is not octx)
+      self.assertTrue(nctx.in_transaction())
+      self.assertEqual(nkey, key)
+      # Interesting!  The current transaction doesn't see the update
+      self.assertEqual(nkey.get().count, 3)
+      # Outside the transaction it's up to 1
+      get_count = model.non_transactional(lambda: nkey.get().count)
+      self.assertEqual(get_count(), 1)
+      # propagation=None -- implies NESTED, raises an error
+      flag = None
+      self.assertRaises(datastore_errors.BadRequestError,
+                        model.transactional(propagation=flag)(increment), key)
+      # propagation not set -- implies ALLOWED, runs in current context
+      nkey, nctx = model.transactional()(increment)(key)
+      self.assertTrue(nctx is octx)
+      self.assertEqual(nkey, key)
+      self.assertEqual(nkey.get().count, 4)
+      # Raise a unique exception so the outer test code can tell we
+      # made it all the way here.
+      raise ZeroDivisionError
+
+    # Run the callback in a transaction.  It should reach the end and
+    # then raise ZeroDivisionError.
+    self.assertRaises(ZeroDivisionError, model.transaction, callback)
+    # One independent transaction has bumped the count.
+    self.assertEqual(model.Key(Counter, 'b').get().count, 1)
+
+  def testNonTransactionalDecorator(self):
+    # Test @non_transactional() with all possible formats and all
+    # possible values for allow_existing and in_transaction().
+    self.ExpectWarnings()
+    class Counter(model.Model):
+      count = model.IntegerProperty(default=0)
+    def increment(key, delta=1):
+      ctx = tasklets.get_context()
+      ent = key.get()
+      if ent is None:
+        ent = Counter(count=delta, key=key)
+      else:
+        ent.count += delta
+      ent.put()
+      return (ent.key, ctx)
+
+    # *** Not currently in a transaction. ***
+    octx = tasklets.get_context()
+    self.assertFalse(octx.in_transaction())
+    key = model.Key(Counter, 'x')
+    # Undecorated
+    nkey, nctx = increment(key)
+    self.assertTrue(nctx is octx)
+    self.assertEqual(nkey, key)
+    self.assertEqual(key.get().count, 1)
+    # Vanilla decorated
+    key, nctx = model.non_transactional(increment)(key)
+    self.assertTrue(nctx is octx)
+    self.assertEqual(nkey, key)
+    self.assertEqual(key.get().count, 2)
+    # Decorated without options
+    key, nctx = model.non_transactional()(increment)(key)
+    self.assertTrue(nctx is octx)
+    self.assertEqual(nkey, key)
+    self.assertEqual(key.get().count, 3)
+    # Decorated with allow_existing=True
+    key, nctx = model.non_transactional(allow_existing=True)(increment)(key)
+    self.assertTrue(nctx is octx)
+    self.assertEqual(nkey, key)
+    self.assertEqual(key.get().count, 4)
+    # Decorated with allow_existing=False
+    key, nctx = model.non_transactional(allow_existing=False)(increment)(key)
+    self.assertTrue(nctx is octx)
+    self.assertEqual(nkey, key)
+    self.assertEqual(key.get().count, 5)
+
+    # *** Currently in a transaction. ***
+    def callback():
+      octx = tasklets.get_context()
+      self.assertTrue(octx.in_transaction())
+      key = model.Key(Counter, 'y')
+      # Undecorated -- runs in this context
+      nkey, nctx = increment(key)
+      self.assertTrue(nctx is octx)
+      self.assertEqual(nkey, key)
+      self.assertEqual(key.get().count, 1)
+      # Vanilla decorated -- runs in different context
+      key, nctx = model.non_transactional(increment)(key)
+      self.assertTrue(nctx is not octx)
+      self.assertFalse(nctx.in_transaction())
+      self.assertEqual(nkey, key)
+      self.assertEqual(key.get().count, 1)
+      # Decorated without options -- runs in different context
+      key, nctx = model.non_transactional()(increment)(key)
+      self.assertTrue(nctx is not octx)
+      self.assertFalse(nctx.in_transaction())
+      self.assertEqual(nkey, key)
+      self.assertEqual(key.get().count, 1)
+      # Decorated with allow_existing=True
+      key, nctx = model.non_transactional(allow_existing=True)(increment)(key)
+      self.assertTrue(nctx is not octx)
+      self.assertFalse(nctx.in_transaction())
+      self.assertEqual(key.get().count, 1)
+      # Decorated with allow_existing=False -- raises exception
+      self.assertRaises(
+        datastore_errors.BadRequestError,
+        model.non_transactional(allow_existing=False)(increment),
+        key)
+      # Raise a unique exception so the outer test code can tell we
+      # made it all the way here.
+      raise ZeroDivisionError
+
+    # Run the callback in a transaction.  It should reach the end and
+    # then raise ZeroDivisionError.
+    self.assertRaises(ZeroDivisionError, model.transaction, callback)
+    # Three non-transactional calls have bumped the count.
+    self.assertEqual(model.Key(Counter, 'y').get().count, 3)
 
   def testPropertyFilters(self):
     class M(model.Model):

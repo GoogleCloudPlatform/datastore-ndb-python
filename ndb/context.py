@@ -172,13 +172,15 @@ class AutoBatcher(object):
 
 class Context(object):
 
-  def __init__(self, conn=None, auto_batcher_class=AutoBatcher, config=None):
+  def __init__(self, conn=None, auto_batcher_class=AutoBatcher, config=None,
+               parent_context=None):
     # NOTE: If conn is not None, config is only used to get the
     # auto-batcher limits.
     if conn is None:
       conn = model.make_connection(config)
     self._conn = conn
     self._auto_batcher_class = auto_batcher_class
+    self._parent_context = parent_context  # For transaction nesting.
     # Get the get/put/delete limits (defaults 1000, 500, 500).
     # Note that the explicit config passed in overrides the config
     # attached to the connection, if it was passed in.
@@ -796,29 +798,57 @@ class Context(object):
     # context set to a new, transactional Context.  Returns a Future.
     # Callback may be a tasklet.
     options = _make_ctx_options(ctx_options)
+    propagation = ContextOptions.propagation(options)
+    if propagation is None:
+      propagation = ContextOptions.NESTED
+
+    parent = self
+    if propagation == ContextOptions.NESTED:
+      if self.in_transaction():
+        raise datastore_errors.BadRequestError(
+          'Nested transactions are not supported.')
+    elif propagation == ContextOptions.MANDATORY:
+      if not self.in_transaction():
+        raise datastore_errors.BadRequestError(
+          'Requires an existing transaction.')
+      raise tasklets.Return(callback())
+    elif propagation == ContextOptions.ALLOWED:
+      if self.in_transaction():
+        raise tasklets.Return(callback())
+    elif propagation == ContextOptions.INDEPENDENT:
+      while parent.in_transaction():
+        parent = parent._parent_context
+        if parent is None:
+          raise datastore_errors.BadRequestError(
+            'Context without non-transactional ancestor')
+    else:
+      raise datastore_errors.BadArgumentError(
+        'Invalid propagation value (%s).' % (propagation,))
+
     app = ContextOptions.app(options) or key_module._DefaultAppId()
     # Note: zero retries means try it once.
     retries = ContextOptions.retries(options)
     if retries is None:
       retries = 3
-    yield self.flush()
+    yield parent.flush()
     for _ in xrange(1 + max(0, retries)):
-      transaction = yield self._conn.async_begin_transaction(options, app)
+      transaction = yield parent._conn.async_begin_transaction(options, app)
       tconn = datastore_rpc.TransactionalConnection(
-        adapter=self._conn.adapter,
-        config=self._conn.config,
+        adapter=parent._conn.adapter,
+        config=parent._conn.config,
         transaction=transaction)
       old_ds_conn = datastore._GetConnection()
-      tctx = self.__class__(conn=tconn,
-                            auto_batcher_class=self._auto_batcher_class)
+      tctx = parent.__class__(conn=tconn,
+                              auto_batcher_class=parent._auto_batcher_class,
+                              parent_context=parent)
       try:
         # Copy memcache policies.  Note that get() will never use
         # memcache in a transaction, but put and delete should do their
         # memcache thing (which is to mark the key as deleted for
         # _LOCK_TIME seconds).  Also note that the in-process cache and
         # datastore policies keep their default (on) state.
-        tctx.set_memcache_policy(self.get_memcache_policy())
-        tctx.set_memcache_timeout_policy(self.get_memcache_timeout_policy())
+        tctx.set_memcache_policy(parent.get_memcache_policy())
+        tctx.set_memcache_timeout_policy(parent.get_memcache_timeout_policy())
         tasklets.set_context(tctx)
         datastore._SetConnection(tconn)  # For taskqueue coordination
         try:
@@ -841,9 +871,8 @@ class Context(object):
         else:
           ok = yield tconn.async_commit(options)
           if ok:
-            # TODO: This is questionable when self is transactional.
-            self._cache.update(tctx._cache)
-            yield self._clear_memcache(tctx._cache)
+            parent._cache.update(tctx._cache)
+            yield parent._clear_memcache(tctx._cache)
             raise tasklets.Return(result)
       finally:
         datastore._SetConnection(old_ds_conn)
