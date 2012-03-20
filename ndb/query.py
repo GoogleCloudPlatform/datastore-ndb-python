@@ -135,6 +135,7 @@ import sys
 from .google_imports import datastore_errors
 from .google_imports import datastore_types
 from .google_imports import datastore_query
+from .google_imports import namespace_manager
 
 from . import model
 from . import context
@@ -788,7 +789,9 @@ class Query(object):
         if app is not None:
           if app != ancestor.app():
             raise TypeError('app/ancestor mismatch')
-        if namespace is not None:
+        if namespace is None:
+          namespace = ancestor.namespace()
+        else:
           if namespace != ancestor.namespace():
             raise TypeError('namespace/ancestor mismatch')
     if filters is not None:
@@ -820,11 +823,30 @@ class Query(object):
       args.append('orders=...')  # PropertyOrder doesn't have a good repr().
     if self.app is not None:
       args.append('app=%r' % self.app)
-    if self.namespace is not None:
+    if (self.namespace is not None and
+        self.namespace != namespace_manager.get_namespace()):
+      # Only show the namespace if set and not the current namespace.
+      # (This is similar to what Key.__repr__() does.)
       args.append('namespace=%r' % self.namespace)
     if self.default_options is not None:
       args.append('default_options=%r' % self.default_options)
     return '%s(%s)' % (self.__class__.__name__, ', '.join(args))
+
+  def _fix_namespace(self):
+    """Internal helper to fix the namespace.
+
+    This is called to ensure that for queries without an explicit
+    namespace, the namespace used by async calls is the one in effect
+    at the time the async call is made, not the one in effect when the
+    the request is actually generated.
+    """
+    if self.namespace is not None:
+      return self
+    namespace = namespace_manager.get_namespace()
+    return self.__class__(kind=self.kind, ancestor=self.ancestor,
+                          filters=self.filters, orders=self.orders,
+                          app=self.app, namespace=namespace,
+                          default_options=self.default_options)
 
   def _get_query(self, connection):
     self.bind()  #  Raises an exception if there are unbound parameters.
@@ -1059,8 +1081,9 @@ class Query(object):
 
     This is the asynchronous version of Query.map().
     """
+    qry = self._fix_namespace()
     return tasklets.get_context().map_query(
-      self,
+      qry,
       callback,
       pass_batch_into_callback=pass_batch_into_callback,
       options=self._make_options(q_options),
@@ -1097,7 +1120,8 @@ class Query(object):
       return self.map_async(None, **q_options)
     # Optimization using direct batches.
     options = self._make_options(q_options)
-    return self._run_to_list([], options=options)
+    qry = self._fix_namespace()
+    return qry._run_to_list([], options=options)
 
   def get(self, **q_options):
     """Get the first query result, if any.
@@ -1113,12 +1137,17 @@ class Query(object):
     """
     return self.get_async(**q_options).get_result()
 
-  @tasklets.tasklet
   def get_async(self, **q_options):
     """Get the first query result, if any.
 
     This is the asynchronous version of Query.get().
     """
+    qry = self._fix_namespace()
+    return qry._get_async(**q_options)
+
+  @tasklets.tasklet
+  def _get_async(self, **q_options):
+    """Internal version of get_async()."""
     res = yield self.fetch_async(1, **q_options)
     if not res:
       raise tasklets.Return(None)
@@ -1142,13 +1171,18 @@ class Query(object):
     """
     return self.count_async(limit, **q_options).get_result()
 
-  @tasklets.tasklet
   @utils.positional(2)
   def count_async(self, limit=None, **q_options):
     """Count the number of query results, up to a limit.
 
     This is the asynchronous version of Query.count().
     """
+    qry = self._fix_namespace()
+    return qry._count_async(limit=limit, **q_options)
+
+  @tasklets.tasklet
+  def _count_async(self, limit=None, **q_options):
+    """Internal version of count_async()."""
     # TODO: Support offset by incorporating it to the limit.
     if 'offset' in q_options:
       raise NotImplementedError('.count() and .count_async() do not support '
@@ -1210,13 +1244,18 @@ class Query(object):
     # NOTE: page_size can't be passed as a keyword.
     return self.fetch_page_async(page_size, **q_options).get_result()
 
-  @tasklets.tasklet
   @utils.positional(2)
   def fetch_page_async(self, page_size, **q_options):
     """Fetch a page of results.
 
     This is the asynchronous version of Query.fetch_page().
     """
+    qry = self._fix_namespace()
+    return qry._fetch_page_async(page_size, **q_options)
+
+  @tasklets.tasklet
+  def _fetch_page_async(self, page_size, **q_options):
+    """Internal version of fetch_page_async()."""
     q_options.setdefault('batch_size', page_size)
     q_options.setdefault('produce_cursors', True)
     it = self.iter(limit=page_size + 1, **q_options)

@@ -1,3 +1,9 @@
+Release 1.0.1 (not yet)
+
+- Issue 168: Fix namespace for async queries.
+
+----------------------------------------
+
 Release 1.0 (not yet)
 
 - Query operations can now pass use_cache=False (see issue 156 comment 7).

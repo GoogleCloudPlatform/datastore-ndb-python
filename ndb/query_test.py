@@ -5,6 +5,7 @@ import os
 import unittest
 
 from .google_imports import datastore_errors
+from .google_imports import namespace_manager
 from .google_imports import users
 from .google_test_imports import datastore_stub_util
 
@@ -1426,6 +1427,56 @@ class QueryTests(test_utils.NDBTest):
     self.assertEqual(['bar', 'foo'], q.analyze())
     q = Foo.gql("WHERE tags = :1 AND name = :foo AND rate = :bar")
     self.assertEqual([1, 'bar', 'foo'], q.analyze())
+
+  def testAsyncNamespace(self):
+    # Test that async queries pick up the namespace when the
+    # foo_async() call is made, not later.
+    # See issue 168.  http://goo.gl/aJp7i
+    namespace_manager.set_namespace('mission')
+    barney = Foo(name='Barney')
+    barney.put()
+    willy = Foo(name='Willy')
+    willy.put()
+    q1 = Foo.query()
+    qm = Foo.query(Foo.name.IN(['Barney', 'Willy'])).order(Foo._key)
+
+    # Test twice: once with a simple query, once with a MultiQuery.
+    for q in q1, qm:
+      # Test fetch_async().
+      namespace_manager.set_namespace('mission')
+      fut = q.fetch_async()
+      namespace_manager.set_namespace('impossible')
+      res = fut.get_result()
+      self.assertEqual(res, [barney, willy])
+
+      # Test map_async().
+      namespace_manager.set_namespace('mission')
+      fut = q.map_async(None)
+      namespace_manager.set_namespace('impossible')
+      res = fut.get_result()
+      self.assertEqual(res, [barney, willy])
+
+      # Test get_async().
+      namespace_manager.set_namespace('mission')
+      fut = q.get_async()
+      namespace_manager.set_namespace('impossible')
+      res = fut.get_result()
+      self.assertEqual(res, barney)
+
+      # Test count_async().
+      namespace_manager.set_namespace('mission')
+      fut = q.count_async()
+      namespace_manager.set_namespace('impossible')
+      res = fut.get_result()
+      self.assertEqual(res, 2)
+
+      # Test fetch_page_async().
+      namespace_manager.set_namespace('mission')
+      fut = q.fetch_page_async(2)
+      namespace_manager.set_namespace('impossible')
+      res, cur, more = fut.get_result()
+      self.assertEqual(res, [barney, willy])
+      self.assertEqual(more, False)
 
 
 def main():
