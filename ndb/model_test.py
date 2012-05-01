@@ -619,20 +619,28 @@ class ModelTests(test_utils.NDBTest):
 
   def testPartialEntities(self):
     class Foo(model.Model):
-      pass
+      a = model.StringProperty()
+      b = model.StringProperty()
     ent0 = Foo()
-    self.assertEqual(ent0._partial, False)
-    ent1 = Foo(partial=True)
-    self.assertEqual(ent1._partial, True)
+    self.assertEqual(ent0._projection, ())
+    ent1 = Foo(projection=('a',))
+    self.assertEqual(ent1._projection, ('a',))
     self.assertNotEqual(ent0, ent1)
-    ent2 = Foo(_partial=42)
-    self.assertEqual(ent2._partial, True)
-    self.assertEqual(repr(ent2), 'Foo(_partial=True)')
+    ent2 = Foo(_projection=['a'])
+    self.assertEqual(ent2._projection, ('a',))
+    self.assertEqual(repr(ent2), "Foo(_projection=('a',))")
     self.assertRaises(datastore_errors.BadRequestError, ent2.put)
-    ent3 = Foo(_partial=True, id=42)  # Sets the key
-    self.assertEqual(ent3._partial, True)
-    self.assertEqual(repr(ent3), "Foo(key=Key('Foo', 42), _partial=True)")
+    ent3 = Foo(_projection=('a',), id=42)  # Sets the key
+    self.assertEqual(ent3._projection, ('a',))
+    self.assertEqual(repr(ent3),
+                     "Foo(key=Key('Foo', 42), _projection=('a',))")
     ent3.key.delete()  # No failure
+    # Another one that differs only in projection.
+    ent4 = Foo(_projection=('a', 'b'), id=42)
+    self.assertEqual(ent4._projection, ('a', 'b'))
+    self.assertEqual(repr(ent4),
+                     "Foo(key=Key('Foo', 42), _projection=('a', 'b'))")
+    self.assertNotEqual(ent3, ent4)
 
   def testQuery(self):
     class MyModel(model.Model):

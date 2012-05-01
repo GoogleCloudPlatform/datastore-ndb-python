@@ -1174,8 +1174,8 @@ class Property(ModelAttribute):
     resulting value or list of values is both stored back in the
     entity and returned from this method.
     """
-    if entity._partial:
-      # Ignore the default for partial values.
+    if entity._projection:
+      # Ignore the default for projected entities.
       value = self._retrieve_value(entity, None)
     else:
       value = self._retrieve_value(entity, self._default)
@@ -2489,7 +2489,7 @@ class Model(_NotEqualMixin):
   # Defaults for instance variables.
   _entity_key = None
   _values = None
-  _partial = False
+  _projection = ()  # Tuple of names of projected properties.
 
   # Hardcoded pseudo-property for the key.
   _key = ModelKey()
@@ -2524,7 +2524,7 @@ class Model(_NotEqualMixin):
     app = get_arg(kwds, 'app')
     namespace = get_arg(kwds, 'namespace')
     parent = get_arg(kwds, 'parent')
-    self._partial = bool(get_arg(kwds, 'partial'))
+    self._projection = tuple(get_arg(kwds, 'projection') or ())
     if key is not None:
       if (id is not None or parent is not None or
           app is not None or namespace is not None):
@@ -2620,8 +2620,8 @@ class Model(_NotEqualMixin):
     args.sort()
     if self._key is not None:
       args.insert(0, 'key=%r' % self._key)
-    if self._partial:
-      args.append('_partial=True')
+    if self._projection:
+      args.append('_projection=%r' % (self._projection,))
     s = '%s(%s)' % (self.__class__.__name__, ', '.join(args))
     return s
 
@@ -2667,7 +2667,7 @@ class Model(_NotEqualMixin):
       # TODO: If one key is None and the other is an explicit
       # incomplete key of the simplest form, this should be OK.
       return False
-    if self._partial != other._partial:
+    if self._projection != other._projection:
       return False
     return self._equivalent(other)
 
@@ -2741,12 +2741,14 @@ class Model(_NotEqualMixin):
 
     indexed_properties = pb.property_list()
     unindexed_properties = pb.raw_property_list()
+    projection = []
     for plist in [indexed_properties, unindexed_properties]:
       for p in plist:
         if p.meaning() == entity_pb.Property.INDEX_VALUE:
-          ent._partial = True
+          projection.append(p.name())
         prop = ent._get_property_for(p, plist is indexed_properties)
         prop._deserialize(ent, p)
+    ent._projection = tuple(projection)
 
     return ent
 
@@ -2920,7 +2922,7 @@ class Model(_NotEqualMixin):
 
     This is the asynchronous version of Model._put().
     """
-    if self._partial:
+    if self._projection:
       raise datastore_errors.BadRequestError('Cannot put a partial entity')
     from . import tasklets
     ctx = tasklets.get_context()

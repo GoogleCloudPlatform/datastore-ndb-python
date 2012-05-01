@@ -778,7 +778,7 @@ class Context(object):
   def _update_cache_from_query_result(self, ent, options):
     if isinstance(ent, model.Key):
       return ent  # It was a keys-only query and ent is really a Key.
-    if ent._partial:
+    if ent._projection:
       return ent  # Never cache partial entities (projection query results).
     key = ent._key
     if not self._use_cache(key, options):

@@ -271,14 +271,14 @@ class QueryTests(test_utils.NDBTest):
     key = Foo(p=1, q=2, r=[3, 4]).put()
     q = Foo.query(Foo.p >= 0)
     ent = q.get(projection=[Foo.p, 'q'])
-    self.assertTrue(ent._partial)
+    self.assertEqual(ent._projection, ('pp', 'q'))
     self.assertEqual(ent.p, 1)
     self.assertEqual(ent.q, 2)
     self.assertEqual(ent.r, [])
     self.assertEqual(ent.d, None)  # The default is ignored!
     ents = q.fetch(projection=['pp', 'r'])
-    self.assertEqual(ents, [Foo(p=1, r=[3], key=key, partial=True),
-                            Foo(p=1, r=[4], key=key, partial=True)])
+    self.assertEqual(ents, [Foo(p=1, r=[3], key=key, projection=('pp', 'r')),
+                            Foo(p=1, r=[4], key=key, projection=['pp', 'r'])])
     self.assertRaises(datastore_errors.BadArgumentError, q.get, projection=[42])
 
   def testQueryWithProjectAllTypes(self):
@@ -1487,9 +1487,11 @@ class QueryTests(test_utils.NDBTest):
   def testGqlProjection(self):
     q = query.gql("SELECT name, tags FROM Foo WHERE name < 'joe' ORDER BY name")
     self.assertEqual(q.fetch(), [Foo(name='jill', tags=['jack'],
-                                     key=self.jill.key, partial=True),
+                                     key=self.jill.key,
+                                     projection=['name', 'tags']),
                                  Foo(name='jill', tags=['jill'],
-                                     key=self.jill.key, partial=True)])
+                                     key=self.jill.key,
+                                     projection=('name', 'tags'))])
 
   def testAsyncNamespace(self):
     # Test that async queries pick up the namespace when the
