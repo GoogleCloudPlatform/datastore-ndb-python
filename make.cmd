@@ -170,7 +170,7 @@ IF "%VERSION%"=="25" (
 GOTO end
 
 :runtests
-CALL %PYTHON% %PYTHONFLAGS% runtests.py %FLAGS%
+CALL %PYTHON% %PYTHONFLAGS% -m ndb.ndb_test %FLAGS%
 GOTO end
 
 :debug
