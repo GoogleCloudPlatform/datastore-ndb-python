@@ -1,4 +1,4 @@
-Release 1.0.7 (future)
+Release 1.0.7 (included in SDK 1.7.4)
 
 - Issue 223: JsonProperty(json_type=dict) restricts the JSON value to a dict.
 - Issue 220: Unknown properties when deserializing repeated structured prop.
