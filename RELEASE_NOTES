@@ -1,3 +1,7 @@
+Release 1.0.9 (included in SDK 1.8.0)
+
+- Issue 229: Add support for 'distinct' queries
+
 Release 1.0.8 (included in SDK 1.7.7)
 
 - Issue 227: ndb.Model constructor does not handle projections correctly

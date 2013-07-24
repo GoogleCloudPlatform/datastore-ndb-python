@@ -709,9 +709,9 @@ class ModelTests(test_utils.NDBTest):
       rank = model.IntegerProperty()
     q = Inner.query()
     q.fetch(projection=['name', 'rank'])
-    self.assertRaises(model.BadProjectionError,
+    self.assertRaises(model.InvalidPropertyError,
                       q.fetch, projection=['name.foo'])
-    self.assertRaises(model.BadProjectionError,
+    self.assertRaises(model.InvalidPropertyError,
                       q.fetch, projection=['booh'])
     class Outer(model.Expando):
       inner = model.StructuredProperty(Inner)
@@ -719,13 +719,13 @@ class ModelTests(test_utils.NDBTest):
       tag = model.StringProperty()
     q = Outer.query()
     q.fetch(projection=['tag', 'inner.name', 'inner.rank', 'whatever'])
-    self.assertRaises(model.BadProjectionError,
+    self.assertRaises(model.InvalidPropertyError,
                       q.fetch, projection=['inner'])
-    self.assertRaises(model.BadProjectionError,
+    self.assertRaises(model.InvalidPropertyError,
                       q.fetch, projection=['inner.name.foo'])
-    self.assertRaises(model.BadProjectionError,
+    self.assertRaises(model.InvalidPropertyError,
                       q.fetch, projection=['inner.booh'])
-    self.assertRaises(model.BadProjectionError,
+    self.assertRaises(model.InvalidPropertyError,
                       q.fetch, projection=['blob'])
 
   def testQuery(self):
@@ -1332,7 +1332,7 @@ class ModelTests(test_utils.NDBTest):
     property.set_name('repstruct.country')
     property.mutable_value().set_stringvalue('iceland')
     q = Person._from_pb(pb)
-    self.assertIsNotNone(q)
+    self.assertNotEqual(None, q)
     self.assertEqual(q.repstruct[0].ctime, p.repstruct[0].ctime)
 
   def PrepareForPutTests(self, propclass):
@@ -1420,7 +1420,7 @@ property <
     person_with_extra_data = PERSON_PB + new_property
 
     p = Person._from_pb(pb)  # Ensure the extra property is ignored.
-    self.assertIsNotNone(p)
+    self.assertNotEqual(None, p)
     self.assertEqual(p.name, 'Google')
 
   def testRepeatedStructPropUnknownProp(self):
