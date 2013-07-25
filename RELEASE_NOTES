@@ -1,3 +1,10 @@
+Release 1.0.10 (included in SDK 1.8.3)
+
+- Issue 9591(GAE): BadRequestError when trying iterate over a query with projection and distinct with NDB
+- Issue 232: @ndb.non_transaction fails to reset global datastore connection
+- Issue 234: Transaction exception is lost if rollback fails
+- Issue 236: required and default shouldn't be mutally exclusive
+
 Release 1.0.9 (included in SDK 1.8.0)
 
 - Issue 229: Add support for 'distinct' queries

@@ -794,7 +794,6 @@ class Context(object):
       try:
         inq = tasklets.SerialQueueFuture()
         query.run_to_queue(inq, self._conn, options)
-        is_ancestor_query = query.ancestor is not None
         while True:
           try:
             batch, i, ent = yield inq.getq()
@@ -903,10 +902,10 @@ class Context(object):
         adapter=parent._conn.adapter,
         config=parent._conn.config,
         transaction=transaction)
-      old_ds_conn = datastore._GetConnection()
       tctx = parent.__class__(conn=tconn,
                               auto_batcher_class=parent._auto_batcher_class,
                               parent_context=parent)
+      tctx._old_ds_conn = datastore._GetConnection()
       ok = False
       try:
         # Copy memcache policies.  Note that get() will never use
@@ -929,7 +928,7 @@ class Context(object):
           raise
         except Exception:
           t, e, tb = sys.exc_info()
-          yield tconn.async_rollback(options)  # TODO: Don't block???
+          tconn.async_rollback(options)  # Fire and forget.
           if issubclass(t, datastore_errors.Rollback):
             # TODO: Raise value using tasklets.get_return_value(t)?
             return
@@ -943,7 +942,8 @@ class Context(object):
             raise tasklets.Return(result)
             # The finally clause will run the on-commit queue.
       finally:
-        datastore._SetConnection(old_ds_conn)
+        datastore._SetConnection(tctx._old_ds_conn)
+        del tctx._old_ds_conn
         if ok:
           # Call the callbacks collected in the transaction context's
           # on-commit queue.  If the transaction failed the queue is

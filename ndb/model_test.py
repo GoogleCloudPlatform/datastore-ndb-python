@@ -995,15 +995,34 @@ class ModelTests(test_utils.NDBTest):
     # Check that b is still unset.
     self.assertFalse(MyModel.b._has_value(m))
 
+  def testRequiredDefault(self):
+    # Test combining required and default.
+    class MyModel(model.Model):
+      a = model.StringProperty(required=True, default='a')
+      b = model.StringProperty(required=True, default='')
+    x = MyModel()
+    self.assertEqual(x.a, 'a')
+    self.assertEqual(x.b, '')
+    x._to_pb()  # Okay.
+    x.a = ''
+    self.assertEqual(x.a, '')
+    x._to_pb()  # Okay.
+    x.a = None
+    self.assertEqual(x.a, None)
+    self.assertRaises(datastore_errors.BadValueError, x._to_pb)  # Fail.
+    x.a = ''
+    x.b = None
+    self.assertEqual(x.a, '')
+    self.assertEqual(x.b, None)
+    self.assertRaises(datastore_errors.BadValueError, x._to_pb)  # Fail.
+
   def testRepeatedRequiredDefaultConflict(self):
-    # Allow at most one of repeated=True, required=True, default=<non-None>.
+    # Don't combine repeated=True with required=True or default=<non-None>
     class MyModel(model.Model):
       self.assertRaises(Exception,
                         model.StringProperty, repeated=True, default='')
       self.assertRaises(Exception,
                         model.StringProperty, repeated=True, required=True)
-      self.assertRaises(Exception,
-                        model.StringProperty, required=True, default='')
       self.assertRaises(Exception,
                         model.StringProperty,
                         repeated=True, required=True, default='')
@@ -1419,7 +1438,10 @@ property <
 """
     person_with_extra_data = PERSON_PB + new_property
 
-    p = Person._from_pb(pb)  # Ensure the extra property is ignored.
+    pb = entity_pb.EntityProto()
+    pb.ParseASCII(person_with_extra_data)
+    # Ensure the extra property is ignored.
+    p = Person._from_pb(pb)
     self.assertNotEqual(None, p)
     self.assertEqual(p.name, 'Google')
 
@@ -2776,7 +2798,7 @@ property <
     class Outer(model.Model):
       wrap = model.StructuredProperty(Inner, repeated=True)
     orig = Outer(wrap=[Inner(arg=1), Inner(arg=2)])
-    key = orig.put()
+    orig.put()
     copy = Outer.query().get()
     self.assertEqual(copy, orig)
 
@@ -3623,6 +3645,11 @@ property <
     self.ExpectWarnings()
     class Counter(model.Model):
       count = model.IntegerProperty(default=0)
+    class DbCounter(db.Model):
+      count = db.IntegerProperty(default=0)
+      @classmethod
+      def kind(cls):
+        return Counter._get_kind()
     def increment(key, delta=1):
       ctx = tasklets.get_context()
       ent = key.get()
@@ -3632,6 +3659,14 @@ property <
         ent.count += delta
       ent.put()
       return (ent.key, ctx)
+    def increment_db(key, delta=1):
+      ent = db.get(key.to_old_key())
+      if ent is None:
+        ent = DbCounter(count=delta, key=key.to_old_key())
+      else:
+        ent.count += delta
+      ent.put()
+      return db.is_in_transaction()
 
     # *** Not currently in a transaction. ***
     octx = tasklets.get_context()
@@ -3695,6 +3730,15 @@ property <
         datastore_errors.BadRequestError,
         model.non_transactional(allow_existing=False)(increment),
         key)
+      # db also respects non_transactional.
+      self.assertFalse(model.non_transactional(increment_db)(key))
+      self.assertEqual(key.get().count, 1)
+      # db non_transactional fails (technically this is undefined behavior, but
+      # we prefer a loud failure).
+      self.assertRaises(Exception, db.non_transactional(increment_db), key)
+      # Make sure we are still in a transaction.
+      self.assertTrue(tasklets.get_context().in_transaction())
+      self.assertTrue(db.is_in_transaction())
       # Raise a unique exception so the outer test code can tell we
       # made it all the way here.
       raise ZeroDivisionError
@@ -3703,7 +3747,7 @@ property <
     # then raise ZeroDivisionError.
     self.assertRaises(ZeroDivisionError, model.transaction, callback)
     # Three non-transactional calls have bumped the count.
-    self.assertEqual(model.Key(Counter, 'y').get().count, 3)
+    self.assertEqual(model.Key(Counter, 'y').get().count, 4)
 
   def testPropertyFilters(self):
     class M(model.Model):

@@ -120,10 +120,10 @@ accept several optional keyword arguments:
 - verbose_name=<value>: A human readable name for this property.  This
   human readable name can be used for html form labels.
 
-The repeated, required and default options are mutually exclusive: a
+The repeated and required/default options are mutually exclusive: a
 repeated property cannot be required nor can it specify a default
 value (the default is always an empty list and an empty list is always
-an allowed value), and a required property cannot have a default.
+an allowed value), but a required property can have a default.
 
 Some property types have additional arguments.  Some property types
 do not support all options.
@@ -286,17 +286,17 @@ import datetime
 import logging
 import zlib
 
+from .google_imports import datastore
 from .google_imports import datastore_errors
-from .google_imports import datastore_types
-from .google_imports import users
 from .google_imports import datastore_query
 from .google_imports import datastore_rpc
+from .google_imports import datastore_types
+from .google_imports import users
 from .google_imports import entity_pb
 
+from . import key as key_module  # NOTE: 'key' is a common local variable name.
 from . import utils
 
-# NOTE: 'key' is a common local variable name.
-from . import key as key_module
 Key = key_module.Key  # For export.
 
 # NOTE: Property and Error classes are added later.
@@ -783,10 +783,8 @@ class Property(ModelAttribute):
       self._default = default
     if verbose_name is not None:
       self._verbose_name = verbose_name
-    if (bool(self._repeated) +
-        bool(self._required) +
-        (self._default is not None)) > 1:
-      raise ValueError('repeated, required and default are mutally exclusive.')
+    if self._repeated and (self._required or self._default is not None):
+      raise ValueError('repeated is incompatible with required or default')
     if choices is not None:
       if not isinstance(choices, (list, tuple, set, frozenset)):
         raise TypeError('choices must be a list, tuple or set; received %r' %
@@ -1251,8 +1249,9 @@ class Property(ModelAttribute):
 
     This returns False if a value is stored but it is None.
     """
-    return not self._required or (self._has_value(entity) and
-                                  self._get_value(entity) is not None)
+    return (not self._required or
+            ((self._has_value(entity) or self._default is not None) and
+             self._get_value(entity) is not None))
 
   def __get__(self, entity, unused_cls=None):
     """Descriptor protocol: get the value from the entity."""
@@ -3669,11 +3668,14 @@ def non_transactional(_func=None, allow_existing=True):
         if ctx is None:
           raise datastore_errors.BadRequestError(
             'Context without non-transactional ancestor')
+      save_ds_conn = datastore._GetConnection()
       try:
+        datastore._SetConnection(save_ctx._old_ds_conn)
         tasklets.set_context(ctx)
         return func(*args, **kwds)
       finally:
         tasklets.set_context(save_ctx)
+        datastore._SetConnection(save_ds_conn)
     return inner_non_transactional_wrapper
   return outer_non_transactional_wrapper
 

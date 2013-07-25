@@ -717,6 +717,32 @@ class ContextTests(test_utils.NDBTest):
     foo().check_success()
     self.assertEqual(key.get(), None)
 
+  def testContext_TransactionRollbackException(self):
+    self.ExpectWarnings()
+    key = model.Key('Foo', 1)
+
+    class CustomException(Exception):
+      pass
+    def bad_transaction(*arg, **kwargs):
+      return datastore_rpc.datastore_pb.Transaction()
+    @tasklets.tasklet
+    def foo():
+      ent = model.Expando(key=key, bar=1)
+      @tasklets.tasklet
+      def callback():
+        # Cause rollback to return an exception
+        tasklets.get_context()._conn._end_transaction = bad_transaction
+        yield ent.put_async()
+        raise CustomException()
+      yield self.ctx.transaction(callback)
+    try:
+      foo().check_success()
+      self.fail()
+    except CustomException:
+      pass  # good
+
+    self.assertEqual(key.get(), None)
+
   def testContext_TransactionAddTask(self):
     self.ExpectWarnings()
     key = model.Key('Foo', 1)
