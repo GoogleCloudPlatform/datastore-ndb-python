@@ -21,10 +21,13 @@ and other environment variables.
 """
 
 import logging
+import tempfile
 
+from .google_imports import apiproxy_stub_map
 from .google_imports import datastore
 from .google_imports import datastore_pbs
 from .google_imports import datastore_rpc
+from .google_test_imports import cloud_datastore_v1_remote_stub
 from .google_test_imports import datastore_stub_util
 from .google_test_imports import testbed
 from .google_test_imports import unittest
@@ -32,6 +35,14 @@ from .google_test_imports import unittest
 from . import model
 from . import tasklets
 from . import eventloop
+
+from . import local_cloud_datastore_factory
+
+
+_STARTUP_OPTIONS = [
+    '--dev_appserver_option='
+    '--property=datastore.auto_id_allocation_policy=SEQUENTIAL',
+]
 
 
 class NDBBaseTest(unittest.TestCase):
@@ -144,8 +155,27 @@ class NDBTest(NDBBaseTest):
 class NDBCloudDatastoreV1Test(NDBBaseTest):
   """NDB test base that uses a datastore V1 connection."""
 
+  @classmethod
+  def setUpClass(cls):
+    factory = local_cloud_datastore_factory.LocalCloudDatastoreFactory()
+    cls.datastore = factory.Create(cls.APP_ID, _STARTUP_OPTIONS)
+
+
+  @classmethod
+  def tearDownClass(cls):
+    cls.datastore.Stop()
+
   def setUp(self):
     super(NDBCloudDatastoreV1Test, self).setUp()
+    self.datastore.Clear()
+    stub = cloud_datastore_v1_remote_stub.CloudDatastoreV1RemoteStub(
+        self.datastore.GetDatastore())
+    apiproxy_stub_map.apiproxy.ReplaceStub(datastore_rpc._CLOUD_DATASTORE_V1,
+                                           stub)
+
+  def tearDown(self):
+    super(NDBCloudDatastoreV1Test, self).tearDown()
+    self.datastore.Clear()
 
   def SetupContextCache(self):
     """Set up the context cache to use the V1 API."""
