@@ -19,6 +19,7 @@ from setuptools import find_packages
 
 
 REQUIREMENTS = [
+    'googledatastore>=4.0.0b1'
 ]
 
 setup(
