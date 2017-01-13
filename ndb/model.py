@@ -1886,7 +1886,7 @@ class JsonProperty(BlobProperty):
       import json
     except ImportError:
       import simplejson as json
-    return json.dumps(value)
+    return json.dumps(value, separators=(',', ':'))
 
   def _from_base_type(self, value):
     try:
