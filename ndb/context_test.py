@@ -383,10 +383,12 @@ class ContextTestMixin(object):
 
       @tasklets.tasklet
       def callback():
-        # Cause rollback to return an exception
-        ctx = tasklets.get_context()
-        ctx._conn._end_transaction = self.make_bad_transaction
         yield ent.put_async()
+        ctx = tasklets.get_context()
+        ctx._conn.transaction  # force evaluation
+        # hack for testing
+        (ctx._conn
+         ._TransactionalConnection__transaction) = self.make_bad_transaction()
         raise CustomException()
       yield self.ctx.transaction(callback)
     try:
@@ -571,8 +573,8 @@ class ContextTestMixin(object):
     self.assertEqual(bar.name, 'updated-bar')
 
   def start_test_server(self):
-    host = '127.0.0.1'
-    s = socket.socket()
+    host = 'localhost'
+    s = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     for i in range(10):
       port = random.randrange(32768, 60000)

@@ -16,7 +16,7 @@
 """Tests for query.py."""
 
 import datetime
-import os
+import pickle
 
 from .google_imports import datastore_errors
 from .google_imports import datastore_pbs
@@ -1988,30 +1988,51 @@ class BaseQueryTestMixin(object):
 
     self.hugeOffsetTestHelper(fetch_from_queue)
 
+  def testQueryPickleFilter(self):
+    for protocol in (0, pickle.HIGHEST_PROTOCOL):
+      q = query.Query(kind='Foo').filter(Foo.rate == 1)
+      new_q = pickle.loads(pickle.dumps(q, protocol=protocol))
+
+      self.assertTrue(isinstance(new_q, query.Query))
+      self.assertEqual(new_q.filters, q.filters)
+      self.assertTrue(isinstance(new_q.filters, query.FilterNode))
+
+  def testQueryPickleParameterAndConjunction(self):
+    for protocol in (0, pickle.HIGHEST_PROTOCOL):
+      q = query.gql('SELECT * FROM Foo WHERE name = :1 AND rate = :foo')
+      new_q = pickle.loads(pickle.dumps(q, protocol=protocol))
+
+      self.assertTrue(isinstance(new_q, query.Query))
+      self.assertEqual(new_q.filters, q.filters)
+      self.assertTrue(isinstance(new_q.filters, query.ConjunctionNode))
+      self.assertTrue(isinstance(list(new_q.filters)[0], query.ParameterNode))
+
+  def testQueryPicklePostFilter(self):
+    class Struct(model.Model):
+      other_prop = model.StringProperty()
+      other_other_prop = model.IntegerProperty()
+
+    class Bar(model.Model):
+      prop = model.StructuredProperty(Struct, repeated=True)
+
+    for protocol in (0, pickle.HIGHEST_PROTOCOL):
+      q = query.Query(kind='Bar').filter(
+          Bar.prop == Struct(other_prop='foo', other_other_prop=1))
+      new_q = pickle.loads(pickle.dumps(q, protocol=protocol))
+
+      self.assertTrue(isinstance(new_q, query.Query))
+      self.assertEqual(new_q.filters, q.filters)
+      self.assertTrue(isinstance(new_q.filters, query.ConjunctionNode))
+      subnodes = list(new_q.filters)
+      self.assertTrue(
+          any(isinstance(node, query.PostFilterNode) for node in subnodes))
+
 
 class IndexListTestMixin(object):
   """Tests for Index lists. Must be used with BaseQueryTestMixin."""
 
-  def create_index(self):
-    ci = datastore_stub_util.datastore_pb.CompositeIndex()
-    ci.set_app_id(os.environ['APPLICATION_ID'])
-    ci.set_id(0)
-    ci.set_state(ci.WRITE_ONLY)
-    index = ci.mutable_definition()
-    index.set_ancestor(0)
-    index.set_entity_type('Foo')
-    property = index.add_property()
-    property.set_name('name')
-    property.set_direction(property.DESCENDING)
-    property = index.add_property()
-    property.set_name('tags')
-    property.set_direction(property.ASCENDING)
-    stub = self.testbed.get_stub('datastore_v3')
-    stub.CreateIndex(ci)
-
   def testIndexListPremature(self):
     # Before calling next() we don't have the information.
-    self.create_index()
     q = Foo.query(Foo.name >= 'joe', Foo.tags == 'joe')
     qi = q.iter()
     self.assertEqual(qi.index_list(), None)
@@ -2057,7 +2078,6 @@ class IndexListTestMixin(object):
   def testIndexListWithIndexAndOrder(self):
     # Test a non-trivial query with sort order and an actual composite
     # index present.
-    self.create_index()
     q = Foo.query(Foo.name >= 'joe', Foo.tags == 'joe')
     q = q.order(-Foo.name, Foo.tags)
     qi = q.iter()
@@ -2075,7 +2095,6 @@ class IndexListTestMixin(object):
                          id=0)])
 
   def testIndexListMultiQuery(self):
-    self.create_index()
     q = Foo.query(query.OR(Foo.name == 'joe', Foo.name == 'jill'))
     qi = q.iter()
     qi.next()
