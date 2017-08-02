@@ -20,7 +20,7 @@ from setuptools import find_packages
 
 
 REQUIREMENTS = [
-    'googledatastore==5.0.0b0',
+    'googledatastore==7.0.1',
 ]
 TEST_REQUIREMENTS = [
     'portpicker',
@@ -28,7 +28,7 @@ TEST_REQUIREMENTS = [
 
 setup(
     name='ndb',
-    version='1.0.13b1',
+    version='1.1.0',
     description='NDB Client Library for Cloud Datastore',
     author='Google Cloud Datastore Team',
     author_email='gcd-discuss@googlegroups.com',

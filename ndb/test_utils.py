@@ -174,8 +174,8 @@ class NDBCloudDatastoreV1Test(NDBBaseTest):
   def setUpClass(cls):
     # Late import so that tests can still run if googledatastore is not
     # available.
-    from . import datastore_emulator
-    factory = datastore_emulator.DatastoreEmulatorFactory()
+    from . import local_cloud_datastore_factory
+    factory = local_cloud_datastore_factory.LocalCloudDatastoreFactory()
     cls.datastore = factory.Create(cls.APP_ID)
 
   @classmethod

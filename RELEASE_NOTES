@@ -1,3 +1,8 @@
+Release 1.1.0
+----------------------------------------
+
+- Bump google-datastore dependency to 7.1
+
 Release 1.0.12 (included in SDK 1.9.21)
 
 - Improved ndb deserialization speed in keys.
