@@ -22,3 +22,6 @@ nosetests.xml
 
 # Travis cache
 cache/
+
+# IDE files
+.idea

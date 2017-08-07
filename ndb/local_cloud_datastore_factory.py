@@ -18,10 +18,10 @@ import tempfile
 
 from .google_imports import datastore_pbs
 
-from googledatastore import local_cloud_datastore
+from googledatastore import datastore_emulator
 
 class LocalCloudDatastoreFactory(
-    local_cloud_datastore.LocalCloudDatastoreFactory):
+    datastore_emulator.DatastoreEmulatorFactory):
 
   def __init__(self):
     working_directory = tempfile.mkdtemp()

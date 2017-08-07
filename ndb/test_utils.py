@@ -21,6 +21,7 @@ and other environment variables.
 """
 
 import logging
+import shutil
 import tempfile
 import os
 
@@ -37,12 +38,6 @@ from . import context
 from . import model
 from . import tasklets
 from . import eventloop
-
-
-_STARTUP_OPTIONS = [
-    '--dev_appserver_option='
-    '--property=datastore.auto_id_allocation_policy=SEQUENTIAL',
-]
 
 
 class NDBBaseTest(unittest.TestCase):
@@ -154,9 +149,19 @@ class NDBTest(NDBBaseTest):
 
   def setUp(self):
     super(NDBTest, self).setUp()
-    self.testbed.init_datastore_v3_stub()
+
+    # model_test.IndexTests requries index setup.
+    # The legacy datastore_stub requires an gae app root_path for index.yaml
+    # before updating datastore index.
+    self.app_root_path = tempfile.mkdtemp()
+
+    self.testbed.init_datastore_v3_stub(root_path=self.app_root_path)
     self.testbed.init_memcache_stub()
     self.testbed.init_taskqueue_stub()
+
+  def tearDown(self):
+    super(NDBTest, self).tearDown()
+    shutil.rmtree(self.app_root_path)
 
   def MakeConnection(self, *args, **kwargs):
     return model.make_connection(*args, **kwargs)
@@ -171,7 +176,7 @@ class NDBCloudDatastoreV1Test(NDBBaseTest):
     # available.
     from . import local_cloud_datastore_factory
     factory = local_cloud_datastore_factory.LocalCloudDatastoreFactory()
-    cls.datastore = factory.Create(cls.APP_ID, _STARTUP_OPTIONS)
+    cls.datastore = factory.Create(cls.APP_ID)
 
   @classmethod
   def tearDownClass(cls):
