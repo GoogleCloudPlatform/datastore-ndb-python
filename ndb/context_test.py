@@ -31,6 +31,7 @@ from .google_imports import taskqueue
 from .google_test_imports import unittest
 from .google_test_imports import real_unittest
 
+from . import autobatcher
 from . import context
 from . import eventloop
 from . import model
@@ -44,7 +45,7 @@ STORED = True
 NOT_STORED = False
 
 
-class MyAutoBatcher(context.AutoBatcher):
+class MyAutoBatcher(autobatcher.AutoBatcher):
 
   _log = []
 
