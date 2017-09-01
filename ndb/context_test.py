@@ -715,10 +715,10 @@ class ContextMemcacheTestMixin(object):
     key2 = model.Key('Foo', 2)
     ent1 = model.Expando(key=key1, foo=42, bar='hello')
     ent2 = model.Expando(key=key2, foo=1, bar='world')
-    save_add_multi_async = self.ctx._memcache.add_multi_async
+    save_add_multi_async = self.ctx.memcache_client._memcache.add_multi_async
     try:
-      self.ctx._memcache.add_multi_async = tracking_add_multi_async
-      yield self.ctx._memcache.flush_all_async()
+      self.ctx.memcache_client._memcache.add_multi_async = tracking_add_multi_async
+      yield self.ctx.memcache_client._memcache.flush_all_async()
 
       track = []
       foo().check_success()
@@ -728,13 +728,13 @@ class ContextMemcacheTestMixin(object):
                          key2.urlsafe(): ent2._to_pb()},))
       self.assertEqual(track[0][1], {'key_prefix': self.ctx._memcache_prefix,
                                      'time': 0})
-      yield self.ctx._memcache.flush_all_async()
+      yield self.ctx.memcache_client._memcache.flush_all_async()
 
       track = []
       self.ctx.set_memcache_policy(lambda unused_key: False)
       foo().check_success()
       self.assertEqual(len(track), 0)
-      yield self.ctx._memcache.flush_all_async()
+      yield self.ctx.memcache_client._memcache.flush_all_async()
 
       track = []
       self.ctx.set_memcache_policy(lambda key: key == key1)
@@ -744,7 +744,7 @@ class ContextMemcacheTestMixin(object):
                        ({key1.urlsafe(): ent1._to_pb()},))
       self.assertEqual(track[0][1], {'key_prefix': self.ctx._memcache_prefix,
                                      'time': 0})
-      yield self.ctx._memcache.flush_all_async()
+      yield self.ctx.memcache_client._memcache.flush_all_async()
 
       track = []
       self.ctx.set_memcache_policy(lambda unused_key: True)
@@ -759,7 +759,7 @@ class ContextMemcacheTestMixin(object):
                        ({key2.urlsafe(): ent2._to_pb()},))
       self.assertEqual(track[1][1], {'key_prefix': self.ctx._memcache_prefix,
                                      'time': 2})
-      yield self.ctx._memcache.flush_all_async()
+      yield self.ctx.memcache_client._memcache.flush_all_async()
 
       track = []
       badkeys = [key2.urlsafe()]
@@ -767,9 +767,9 @@ class ContextMemcacheTestMixin(object):
       foo().check_success()
       self.assertEqual(len(track), 1)
       self.assertEqual(track[0][2], badkeys)
-      yield self.ctx._memcache.flush_all_async()
+      yield self.ctx.memcache_client._memcache.flush_all_async()
     finally:
-      self.ctx._memcache.add_multi_async = save_add_multi_async
+      self.ctx.memcache_client._memcache.add_multi_async = save_add_multi_async
 
   def testContext_Memcache(self):
     @tasklets.tasklet
@@ -1034,10 +1034,10 @@ class ContextMemcacheTestMixin(object):
     put_fut = self.ctx.put(ent)
 
     eventloop.run0()
-    self.assertTrue(self.ctx._memcache_set_batcher._queues)
+    self.assertTrue(self.ctx.memcache_client.memcache_set_batcher._queues)
     eventloop.run0()
-    self.assertTrue(self.ctx._memcache_set_batcher._running)
-    while self.ctx._memcache_set_batcher._running:
+    self.assertTrue(self.ctx.memcache_client.memcache_set_batcher._running)
+    while self.ctx.memcache_client.memcache_set_batcher._running:
       eventloop.run0()
 
     # Verify that memcache now contains the special _LOCKED value.
@@ -1424,7 +1424,7 @@ class ContextMemcacheTestMixin(object):
 
   def testContext_AutoBatcher_Limit(self):
     # Check that the default limit is taken from the connection.
-    self.assertEqual(self.ctx._get_batcher._limit,
+    self.assertEqual(self.ctx.memcache_client.memcache_get_batcher._limit,
                      datastore_rpc.Connection.MAX_GET_KEYS)
     # Create a Connection with config options that will be overridden
     # by later config options

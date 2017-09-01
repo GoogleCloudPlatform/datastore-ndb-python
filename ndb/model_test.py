@@ -4080,7 +4080,7 @@ property <
     ctx.set_memcache_policy(True)
     ctx.set_memcache_timeout_policy(0)
     # Mock memcache.cas_multi_async().
-    save_memcache_cas_multi_async = ctx._memcache.cas_multi_async
+    save_memcache_cas_multi_async = ctx.memcache_client._memcache.cas_multi_async
     memcache_args_log = []
 
     def mock_memcache_cas_multi_async(*args, **kwds):
@@ -4104,7 +4104,7 @@ property <
     e5 = MyModel(name='5')
     # Test that the timeouts make it through to memcache and Cloud Datastore.
     try:
-      ctx._memcache.cas_multi_async = mock_memcache_cas_multi_async
+      ctx.memcache_client._memcache.cas_multi_async = mock_memcache_cas_multi_async
       ctx._conn.async_put = mock_conn_async_put
       [f1, f3] = model.put_multi_async([e1, e3],
                                        memcache_timeout=7,
@@ -4123,7 +4123,7 @@ property <
       eventloop.run()  # Wait for async memcache request to complete.
       # (And there are straggler events too, but they don't matter here.)
     finally:
-      ctx._memcache.cas_multi_async = save_memcache_cas_multi_async
+      ctx.memcache_client._memcache.cas_multi_async = save_memcache_cas_multi_async
       ctx._conn.async_put = save_conn_async_put
     self.assertEqual([e1.key, e2.key, e3.key, e4.key, e5.key],
                      [x1, x2, x3, x4, x5])
