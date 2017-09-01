@@ -127,6 +127,9 @@ def _make_ctx_options(ctx_options, config_cls=ContextOptions):
 
 
 class Context(object):
+  # NOTE: The default memcache prefix is altered if an incompatible change is
+  # required. Remember to check release notes when using a custom prefix.
+  _memcache_prefix = 'NDB9:'  # TODO: Might make this configurable
 
   def __init__(self, conn=None, auto_batcher_class=autobatcher.AutoBatcher, config=None,
                parent_context=None):
@@ -168,8 +171,6 @@ class Context(object):
                      ]
     self._cache = {}
     self._on_commit_queue = []
-
-  _memcache_prefix = memcache_client.MemcacheClient._memcache_prefix
 
   @tasklets.tasklet
   def flush(self):

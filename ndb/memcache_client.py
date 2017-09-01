@@ -19,10 +19,6 @@ from . import autobatcher
 from . import tasklets
 
 class MemcacheClient(object):
-  # NOTE: The default memcache prefix is altered if an incompatible change is
-  # required. Remember to check release notes when using a custom prefix.
-  _memcache_prefix = 'NDB9:'  # TODO: Might make this configurable
-
   def __init__(self, conn=None, auto_batcher_class=autobatcher.AutoBatcher, max_memcache=None):
     # NOTE: If conn is not None, config is only used to get the
     # auto-batcher limits.
