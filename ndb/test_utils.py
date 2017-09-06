@@ -34,6 +34,7 @@ from .google_test_imports import datastore_stub_util
 from .google_test_imports import testbed
 from .google_test_imports import unittest
 
+from . import autobatcher
 from . import context
 from . import model
 from . import tasklets
@@ -96,7 +97,7 @@ class NDBBaseTest(unittest.TestCase):
   def ResetKindMap(self):
     model.Model._reset_kind_map()
 
-  def MakeContext(self, config=None, auto_batcher_class=context.AutoBatcher,
+  def MakeContext(self, config=None, auto_batcher_class=autobatcher.AutoBatcher,
                   default_model=None, conn=None):
     if not conn:
       conn = self.MakeConnection(config=config,
