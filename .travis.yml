@@ -8,7 +8,7 @@ before_install:
   - ./get_app_engine_sdk.sh
   - ./get_gcd_zip.sh
   - export GAE="./cache/google_appengine"
-  - export GCD_ZIP="./cache/cloud-datastore-emulator-1.2.0.zip"
+  - export GCD_ZIP="./cache/cloud-datastore-emulator-1.3.zip"
 
 install:
   - pip install tox
