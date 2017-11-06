@@ -30,7 +30,7 @@ cd cache
 if [[ -f gcd.zip ]]; then
   echo "GCD already downloaded. Doing nothing."
 else
-  wget https://storage.googleapis.com/gcd/tools/cloud-datastore-emulator-1.3.zip -nv
+  wget https://storage.googleapis.com/gcd/tools/cloud-datastore-emulator-1.3.0.zip -nv
 fi
 
 echo "Cache contents after getting gcd:"
