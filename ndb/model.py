@@ -2127,8 +2127,8 @@ class DateTimeProperty(Property):
       raise NotImplementedError('DatetimeProperty %s can only support UTC. '
                                 'Please derive a new Property to support '
                                 'alternative timezones.' % self._name)
-    dt = value - _EPOCH
-    ival = dt.microseconds + 1000000 * (dt.seconds + 24 * 3600 * dt.days)
+
+    ival = _datetime_to_int64(value)
     v.set_int64value(ival)
     p.set_meaning(entity_pb.Property.GD_WHEN)
 
@@ -2136,7 +2136,35 @@ class DateTimeProperty(Property):
     if not v.has_int64value():
       return None
     ival = v.int64value()
-    return _EPOCH + datetime.timedelta(microseconds=ival)
+    return _int64_to_datetime(ival)
+
+
+def _int64_to_datetime(value):
+  """Convert an int64 to datetime.
+
+  Args:
+    value: An int64 value that is microseconds from EPOCH
+
+  Returns: 
+    A datetime.datetime object.
+  """
+  return _EPOCH + datetime.timedelta(microseconds=value)
+
+
+def _datetime_to_int64(value):
+  """Convert a datetime to int64.
+
+  Args:
+    value: A datetime.datetime object.
+
+  Returns:
+    An int64 value that is microseconds from EPOCH
+  """
+  if not isinstance(value, datetime.datetime):
+    raise TypeError('Cannot convert to int64 expected datetime value; '
+                    'received %s' % value)
+  dt = value - _EPOCH
+  return dt.microseconds + 1000000 * (dt.seconds + 24 * 3600 * dt.days)
 
 
 def _date_to_datetime(value):
@@ -2679,7 +2707,7 @@ class GenericProperty(Property):
     elif v.has_int64value():
       ival = v.int64value()
       if p.meaning() == entity_pb.Property.GD_WHEN:
-        return _EPOCH + datetime.timedelta(microseconds=ival)
+        return _int64_to_datetime(ival)
       return ival
     elif v.has_booleanvalue():
       # The booleanvalue field is an int32, so booleanvalue() returns
@@ -2737,8 +2765,19 @@ class GenericProperty(Property):
         raise NotImplementedError('Property %s can only support the UTC. '
                                   'Please derive a new Property to support '
                                   'alternative timezones.' % self._name)
-      dt = value - _EPOCH
-      ival = dt.microseconds + 1000000 * (dt.seconds + 24 * 3600 * dt.days)
+      ival = _datetime_to_int64(value)
+      v.set_int64value(ival)
+      p.set_meaning(entity_pb.Property.GD_WHEN)
+    elif isinstance(value, datetime.time):
+      if value.tzinfo is not None:
+        raise NotImplementedError('Property %s can only support the UTC. '
+                                  'Please derive a new Property to support '
+                                  'alternative timezones.' % self._name)
+      ival = _datetime_to_int64(_time_to_datetime(value))
+      v.set_int64value(ival)
+      p.set_meaning(entity_pb.Property.GD_WHEN)
+    elif isinstance(value, datetime.date):
+      ival = _datetime_to_int64(_date_to_datetime(value))
       v.set_int64value(ival)
       p.set_meaning(entity_pb.Property.GD_WHEN)
     elif isinstance(value, GeoPt):
