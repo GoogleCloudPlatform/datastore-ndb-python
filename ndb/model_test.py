@@ -3460,7 +3460,7 @@ property <
     class Goo(model.Model):
       prop = model.GenericProperty()
 
-    g = Goo(prop=datetime.time(12))
+    g = Goo(prop=datetime.timedelta(seconds=12))
     self.assertRaises(NotImplementedError, g.put)
 
   def testGenericPropertyCompressedRefusesIndexed(self):
