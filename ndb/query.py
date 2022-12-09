@@ -899,8 +899,7 @@ class Query(object):
     if self.filters is not None:
       args.append('filters=%r' % self.filters)
     if self.orders is not None:
-      # TODO: Format orders better.
-      args.append('orders=...')  # PropertyOrder doesn't have a good repr().
+      args.append('orders=%r' % self.orders)
     if self.projection:
       args.append('projection=%r' % (self._to_property_names(self.projection)))
     if self.group_by:
